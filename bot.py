@@ -3,7 +3,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKe
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # --- КОНФИГУРАЦИЯ ---
-BOT_TOKEN = "ВСТАВЬ_СВОЙ_ТОКЕН_ОТ_BOTFATHER" # Замени на токен нового бота
+BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q" # Замени на токен нового бота
 ADMIN_ID = 1165444045  # Твой ID, который ты скинула
 
 # Каталог товаров (пример заполнения)
