@@ -24,8 +24,8 @@ from telegram.ext import (
 # КОНФИГУРАЦИЯ
 # ────────────────────────────────────────────────
 
-BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"
-ADMIN_ID = 1165444045  # ← твой Telegram ID (менеджера)
+BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"  # ← Замени на реальный!
+ADMIN_ID = 1165444045  # ← Твой Telegram ID (менеджера)
 
 # Простейший веб-сервер, чтобы Render не убивал бота
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -60,7 +60,6 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "Выберите действие в меню FruttoSmile: 🍓"
     await update.effective_message.reply_text(msg, reply_markup=kb)
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = KeyboardButton("📲 Регистрация и +300 бонусов", request_contact=True)
     await update.message.reply_text(
@@ -68,9 +67,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup([[btn]], resize_keyboard=True, one_time_keyboard=True)
     )
 
-
 async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str, order_number: str = None):
     uid = update.effective_user.id
+    print(f"Process photo request for user {uid} with phone {phone} and order {order_number}")  # Debug log
     await update.effective_message.reply_text("🔍 Запрос отправлен менеджеру! Мы сообщим вам статус заказа.")
 
     order_txt = f"\n📦 Заказ: {order_number}" if order_number else ""
@@ -89,12 +88,11 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
     )
     context.user_data.pop('state', None)
 
-
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
-
     state = context.user_data.get('state')
-    if state in ('WAIT_ORDER', 'WAIT_ORDER_AFTER_CONFIRM'):
+    print(f"Handle contact: state={state}, phone={phone}")  # Debug log
+    if state == 'WAIT_ORDER':
         await process_photo_request(update, context, phone)
     else:
         context.user_data['phone'] = phone
@@ -102,8 +100,9 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🎉 Регистрация успешна! Вам начислено 300 бонусов.")
         await send_main_menu(update, context)
 
-
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    print(f"Show confirmation for user {uid}")  # Debug log
     if 'phone' not in context.user_data:
         btn = KeyboardButton("📲 Подтвердить номер", request_contact=True)
         await update.effective_message.reply_text(
@@ -122,15 +121,16 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await update.effective_message.reply_text(
-        "Подтвердите запрос фото заказа?\n\nПосле подтверждения запрос уйдёт менеджеру.",
+        "Вы действительно хотите запросить фото заказа?\n\nПосле подтверждения запрос уйдёт менеджеру.",
         reply_markup=reply_markup
     )
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
 
-
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     state = context.user_data.get('state')
+    uid = update.effective_user.id
+    print(f"Text handler: msg='{msg}', state={state}, user={uid}")  # Debug log для отслеживания
 
     if msg == "⬅️ Назад":
         context.user_data.pop('state', None)
@@ -139,10 +139,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if msg == "📸 Получить фото заказа":
         await show_photo_confirmation(update, context)
-        return
-
-    if state == 'AWAITING_PHOTO_CONFIRM':
-        # Этот блок не нужен, т.к. обрабатывается через callback
         return
 
     if state == 'WAIT_ORDER_NUMBER':
@@ -163,12 +159,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Функция в разработке. Скоро будет доступна!")
         return
 
-
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
+    print(f"Query handler: data={data}")  # Debug log
 
     if data == "confirm_photo_request":
         context.user_data['state'] = 'WAIT_ORDER_NUMBER'
@@ -193,7 +188,6 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = "❌ Заказ не найден."
         await context.bot.send_message(chat_id=uid, text=txt)
 
-
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
@@ -215,7 +209,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Ошибка при пересылке фото: {e}")
 
-
 # ────────────────────────────────────────────────
 # ЗАПУСК
 # ────────────────────────────────────────────────
@@ -234,7 +227,6 @@ def main():
 
     print("Бот запущен...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
