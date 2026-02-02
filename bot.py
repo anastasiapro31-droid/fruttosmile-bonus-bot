@@ -136,51 +136,54 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif msg == "📖 Каталог товаров":
         kb = [
-            [InlineKeyboardButton("🍓 Клубника в шоколаде", callback_data="cat_sweet")],
-            [InlineKeyboardButton("💐 Цветы и наборы", callback_data="cat_flowers")]
+            [InlineKeyboardButton("🎁 Подарочные боксы", callback_data="cat_boxes")],
+            [InlineKeyboardButton("🍓 Сладкие букеты", callback_data="cat_sweet")],
+            [InlineKeyboardButton("💐 Цветы", callback_data="cat_flowers")],
+            [InlineKeyboardButton("🍖 Мужские букеты", callback_data="cat_meat")]
         ]
-        await update.message.reply_text("Наш ассортимент:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
 
     elif msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
         back_kb = ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True)
         links = [
-            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/?ll=104.353133%2C52.259946&z=14"), 
-             InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/104.353179%2C52.259892")],
-            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865"), 
-             InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]
+            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/"), 
+             InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/")],
+            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211"), 
+             InlineKeyboardButton("VK", url="https://vk.com/fruttosmile")]
         ]
-        await update.message.reply_text("⭐ Оставьте отзыв и пришлите скриншот сюда для получения 250 бонусов!", reply_markup=back_kb)
-        await update.message.reply_text("Выберите площадку:", reply_markup=InlineKeyboardMarkup(links))
+        await update.message.reply_text("⭐ Пришлите скриншот отзыва сюда для получения 250 бонусов!", reply_markup=back_kb)
+        await update.message.reply_text("Ссылки на площадки:", reply_markup=InlineKeyboardMarkup(links))
 
     elif msg == "📸 Получить фото заказа":
         context.user_data['state'] = 'WAIT_ORDER_NUMBER'
-        await update.message.reply_text("Введите номер вашего заказа:", reply_markup=ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True))
+        phone_btn = KeyboardButton("📲 Отправить мой номер телефона", request_contact=True)
+        back_kb = ReplyKeyboardMarkup([[phone_btn], ["⬅️ Назад"]], resize_keyboard=True)
+        await update.message.reply_text("Подтвердите ваш номер телефона для поиска заказа:", reply_markup=back_kb)
 
-    # ОБРАБОТКА НОМЕРА ЗАКАЗА
     elif user_state == 'WAIT_ORDER_NUMBER':
-        phone = context.user_data.get('phone', 'Не указан')
+        # Если прислали контакт или текст
+        search_phone = update.message.text if update.message.text else update.message.contact.phone_number
         user_id = update.message.from_user.id
-        await update.message.reply_text(f"Запрос по заказу №{msg} отправлен менеджеру. Ожидайте фото! ⏳")
+        await update.message.reply_text(f"Ищу заказ по номеру: {search_phone}... 🔍\nЗапрос отправлен менеджеру!")
         
-        admin_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Заказа не существует", callback_data=f"no_order_{user_id}")]])
+        admin_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Заказ не найден", callback_data=f"no_order_{user_id}")]])
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"🔔 <b>ЗАПРОС ФОТО</b>\n📦 Заказ №: {msg}\n👤 Клиент: {update.message.from_user.full_name}\n📱 Тел: {phone}\n🆔 ID клиента: <code>{user_id}</code>",
+            text=f"🔔 <b>ЗАПРОС ФОТО</b>\n📱 Телефон: {search_phone}\n👤 Клиент: {update.message.from_user.full_name}\n🆔 ID: <code>{user_id}</code>",
             reply_markup=admin_kb,
             parse_mode="HTML"
         )
         context.user_data['state'] = None
 
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка кнопок от админа и каталога"""
     query = update.callback_query
     await query.answer()
 
     if query.data.startswith("no_order_"):
         target_id = int(query.data.replace("no_order_", ""))
-        await context.bot.send_message(chat_id=target_id, text="❌ К сожалению, заказ с таким номером не найден. Пожалуйста, проверьте номер или оформите новый заказ! 🍓")
-        await query.edit_message_text(text=query.message.text + "\n\n🚫 ОТМЕНЕНО: Заказ не найден")
+        await context.bot.send_message(chat_id=target_id, text="❌ Заказ по этому номеру не найден. Попробуйте уточнить данные или оформите новый заказ! 🍓")
+        await query.edit_message_text(text=query.message.text + "\n\n🚫 ОТМЕНЕНО")
 
     elif query.data.startswith("cat_"):
         category = query.data.replace("cat_", "")
@@ -191,21 +194,15 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.chat.send_message("Для заказа вернитесь в меню.", reply_markup=ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True))
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Пересылка фото"""
     user_id = update.message.from_user.id
     if user_id == ADMIN_ID and update.message.reply_to_message:
         try:
-            target_id = int(update.message.reply_to_message.text.split("🆔 ID клиента: ")[1].strip())
-            await context.bot.send_photo(chat_id=target_id, photo=update.message.photo[-1].file_id, caption="Ваше фото заказа от Fruttosmile! ✨")
-            await update.message.reply_text("✅ Отправлено клиенту!")
+            target_id = int(update.message.reply_to_message.text.split("🆔 ID: ")[1].strip())
+            await context.bot.send_photo(chat_id=target_id, photo=update.message.photo[-1].file_id, caption="Ваше фото заказа! ✨")
+            await update.message.reply_text("✅ Отправлено!")
         except:
             await update.message.reply_text("Ошибка отправки.")
-    elif context.user_data.get('state') == 'WAIT_REVIEW':
-        await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, 
-                                    caption=f"📸 Новый отзыв!\nКлиент: {update.message.from_user.full_name}")
-        await update.message.reply_text("✅ Скриншот принят! Начислим бонусы после проверки.")
-        context.user_data['state'] = None
-
+            
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
