@@ -41,7 +41,13 @@ PRODUCTS = {
             [InlineKeyboardButton("💐 Цветы", callback_data="cat_flowers")],
             [InlineKeyboardButton("🍖 Мужские букеты", callback_data="cat_meat")]
         ]
-        await update.message.reply_text("Выберите категорию для просмотра нашего ассортимента:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
+
+    elif msg == "📸 Получить фото заказа":
+        context.user_data['state'] = 'WAIT_ORDER_NUMBER'
+        phone_btn = KeyboardButton("📲 Отправить мой номер телефона", request_contact=True)
+        back_kb = ReplyKeyboardMarkup([[phone_btn], ["⬅️ Назад"]], resize_keyboard=True)
+        await update.message.reply_text("Подтвердите ваш номер телефона для поиска заказа:", reply_markup=back_kb)
 
 # --- ОБНОВЛЕННЫЙ query_handler ---
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
