@@ -70,8 +70,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
         kb = [
-            [InlineKeyboardButton("Яндекс", url="ССЫЛКА"), InlineKeyboardButton("2ГИС", url="ССЫЛКА")],
-            [InlineKeyboardButton("Google", url="ССЫЛКА"), InlineKeyboardButton("VK", url="ССЫЛКА")]
+            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/?ll=104.353133%2C52.259946&z=14"), InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/104.353179%2C52.259892")],
+            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865"), InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]
         ]
         await update.message.reply_text(
             "⭐ Оставьте отзыв о Fruttosmile на любой площадке и пришлите скриншот сюда.\n\n"
@@ -80,7 +80,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif msg == "📍 Адреса самовывоза":
-        await update.message.reply_text("📍 Мы ждем вас по адресу: [Ваш адрес здесь]\n⏰ Работаем каждый день с 09:00 до 21:00")
+        await update.message.reply_text("📍 Мы ждем вас по адресу: [Иркутск, ​Улица Дыбовского, 8/5]\n⏰ Работаем каждый день с 09:00 до 20:00")
 
     elif msg == "📊 Информация о бонусах":
         await update.message.reply_text("🎁 Ваш баланс в Fruttosmile: 0 бонусов\n(Бонусы станут доступны после проверки ваших отзывов)")
