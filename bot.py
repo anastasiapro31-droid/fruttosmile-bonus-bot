@@ -6,15 +6,72 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q" # Замени на токен нового бота
 ADMIN_ID = 1165444045  # Твой ID, который ты скинула
 
-# Каталог товаров (пример заполнения)
+# ================= ВЫБРАННЫЙ КАТАЛОГ ТОВАРОВ =================
 PRODUCTS = {
-    "sweet": [
-        {"name": "Набор Клубники S", "price": "1600", "photo": "https://img.freepik.com/free-photo/chocolate-covered-strawberries_144627-7429.jpg"},
+    "boxes": [
+        {"name": "Бенто-торт из клубники (8 ягод)", "price": "2490", "photo": "http://fruttosmile.su/wp-content/uploads/2025/07/photoeditorsdk-export4.png"},
+        {"name": "Набор клубники и малины в шоколаде", "price": "2990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/06/malinki-takie-vecerinki.jpg"},
+        {"name": "Бокс «С надписью» Средний", "price": "5990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/02/boks-s-nadpisyu.jpg"},
+        {"name": "Корзина клубники в шоколаде S", "price": "5990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/02/korzina-klubniki-v-shokolade-s.jpeg"},
+        {"name": "Торт из клубники в шоколаде", "price": "7490", "photo": "http://fruttosmile.su/wp-content/uploads/2025/03/photo_2025_02_25_16_20_32_481x582.jpg"}
     ],
     "flowers": [
-        {"name": "Букет с голубикой", "price": "3200", "photo": "https://img.freepik.com/free-photo/beautiful-flower-bouquet_23-2149053744.jpg"},
+        {"name": "Букет «Зефирка»", "price": "4490", "photo": "http://fruttosmile.su/wp-content/uploads/2025/03/photoeditorsdk_export_37__481x582.png"},
+        {"name": "Букет из роз и эустомы", "price": "3490", "photo": "http://fruttosmile.su/wp-content/uploads/2025/02/buket-iz-roz-i-eustomy.jpg"},
+        {"name": "Моно букет «Диантусы»", "price": "2690", "photo": "http://fruttosmile.su/wp-content/uploads/2025/02/mono-buket-diantusy.png"}
+    ],
+    "sweet": [
+        {"name": "Букет клубничный S Ажурный", "price": "3990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/02/buket-klubnichnyj-s-azhurnyj-1.jpg"},
+        {"name": "Букет «Ягодное ассорти»", "price": "6490", "photo": "http://fruttosmile.su/wp-content/uploads/2016/12/photo_2024-04-05_17-55-09.jpg"},
+        {"name": "Букет из цельных фруктов «С любовью»", "price": "3990", "photo": "http://fruttosmile.su/wp-content/uploads/2016/04/photo_2022-12-09_15-56-56.jpg"}
+    ],
+    "meat": [
+        {"name": "Букет «Мясной» стандарт", "price": "5990", "photo": "http://fruttosmile.su/wp-content/uploads/2017/02/photo_2024-08-08_16-52-24.jpg"},
+        {"name": "Букет из королевских креветок и клешней краба", "price": "9990", "photo": "http://fruttosmile.su/wp-content/uploads/2018/08/photo_2022-12-09_18-05-36-2.jpg"},
+        {"name": "Мужская корзина «Брутал»", "price": "12990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/03/whatsapp202023_10_1620v2014.38.08_14f00b4d_481x582.jpg"}
     ]
 }
+
+# --- ОБНОВЛЕННЫЕ КНОПКИ КАТАЛОГА В text_handler ---
+# (Замени блок elif msg == "📖 Каталог товаров" на этот)
+    elif msg == "📖 Каталог товаров":
+        kb = [
+            [InlineKeyboardButton("🎁 Подарочные боксы", callback_data="cat_boxes")],
+            [InlineKeyboardButton("🍓 Сладкие букеты", callback_data="cat_sweet")],
+            [InlineKeyboardButton("💐 Цветы", callback_data="cat_flowers")],
+            [InlineKeyboardButton("🍖 Мужские букеты", callback_data="cat_meat")]
+        ]
+        await update.message.reply_text("Выберите категорию для просмотра нашего ассортимента:", reply_markup=InlineKeyboardMarkup(kb))
+
+# --- ОБНОВЛЕННЫЙ query_handler ---
+async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data.startswith("no_order_"):
+        target_id = int(query.data.replace("no_order_", ""))
+        await context.bot.send_message(chat_id=target_id, text="❌ К сожалению, заказ с таким номером не найден. Пожалуйста, проверьте номер или оформите новый заказ на сайте! 🍓")
+        await query.edit_message_text(text=query.message.text + "\n\n🚫 ОТМЕНЕНО: Заказ не найден")
+
+    elif query.data.startswith("cat_"):
+        category = query.data.replace("cat_", "")
+        products = PRODUCTS.get(category, [])
+        
+        # Удаляем сообщение с выбором категорий
+        await query.message.delete()
+        
+        # Отправляем товары по одному
+        for p in products:
+            caption = f"<b>{p['name']}</b>\n💰 Цена: {p['price']}₽"
+            try:
+                await query.message.chat.send_photo(photo=p['photo'], caption=caption, parse_mode="HTML")
+            except Exception as e:
+                # Если ссылка на фото битая, отправим просто текст
+                await query.message.chat.send_message(f"⚠️ Ошибка загрузки фото для: {p['name']}\n{caption}", parse_mode="HTML")
+
+        # Добавляем кнопку назад после всех товаров
+        back_kb = ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True)
+        await query.message.chat.send_message("Это лишь малая часть нашей красоты! ✨\nЧтобы заказать, перейдите в раздел «Оформить заказ».", reply_markup=back_kb)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Старт и регистрация"""
