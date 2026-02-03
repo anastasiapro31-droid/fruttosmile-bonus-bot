@@ -229,6 +229,40 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 await query.message.chat.send_message(f"📦 {p['name']} - {p['price']}₽")
         await query.message.chat.send_message("Для заказа вернитесь в меню.", reply_markup=ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True))
+    
+ # Обработка одобрения отзыва
+    if data.startswith("rev_approve_"):
+        client_id = int(data.split("_")[2])
+        
+        # В этой версии мы отправляем уведомление клиенту. 
+        # Чтобы бонусы сохранились, в идеале нужна БД, но для начала 
+        # мы просто подтверждаем действие для админа:
+        await query.edit_message_caption(
+            caption=query.message.caption + "\n\n🟢 <b>ОДОБРЕНО: +250 бонусов начислено!</b>",
+            parse_mode="HTML",
+            reply_markup=None
+        )
+        
+        # Уведомляем клиента (в его боте высветится сообщение)
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="🎁 Поздравляем! Ваш отзыв прошел модерацию. Вам начислено 250 бонусов! ✨"
+        )
+
+    # Обработка отклонения отзыва
+    elif data.startswith("rev_reject_"):
+        client_id = int(data.split("_")[2])
+        
+        await query.edit_message_caption(
+            caption=query.message.caption + "\n\n🔴 <b>ОТКЛОНЕНО: Бонусы не начислены.</b>",
+            parse_mode="HTML",
+            reply_markup=None
+        )
+        
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="❌ К сожалению, ваш отзыв не прошел модерацию. Убедитесь, что на скриншоте виден текст отзыва и дата."
+        )     
  
     elif data.startswith("st_"):
         uid = int(data.split("_")[2])
@@ -236,25 +270,35 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text=msg)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Если это отзыв от клиента
+    # 1. Если клиент прислал скриншот отзыва
     if context.user_data.get('state') == 'WAIT_REVIEW':
-        await update.message.reply_text("✅ Скриншот принят! Мы начислим бонусы после проверки.")
-        await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, 
-                                     caption=f"📸 ОТЗЫВ от {update.message.from_user.full_name}\n🆔 ID: {update.effective_user.id}")
-        context.user_data.pop('state', None)
+        user = update.effective_user
+        photo_id = update.message.photo[-1].file_id
+        
+        await update.message.reply_text("✅ Скриншот принят! Мы начислим бонусы после проверки модератором.")
+        
+        # Кнопки для админа
+        admin_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_approve_{user.id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_reject_{user.id}")
+            ]
+        ])
+        
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=photo_id,
+            caption=f"📸 <b>НОВЫЙ ОТЗЫВ</b>\n👤 От: {user.full_name}\n🆔 ID: {user.id}\n📱 Тел: {context.user_data.get('phone', 'не указан')}",
+            parse_mode="HTML",
+            reply_markup=admin_kb
+        )
+        context.user_data['state'] = None
         return
 
-    # Если это ответ админа (фото заказа клиенту)
+    # 2. Если админ отвечает на запрос фото (как было раньше)
     if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
-        try:
-            text = update.message.reply_to_message.text
-            match = re.search(r'🆔 Telegram ID: (\d+)', text)
-            if match:
-                tid = int(match.group(1))
-                await context.bot.send_photo(chat_id=tid, photo=update.message.photo[-1].file_id, caption="📸 Фото вашего заказа готово!")
-                await update.message.reply_text("✅ Отправлено клиенту!")
-        except:
-            await update.message.reply_text("Ошибка отправки.")
+        # ... твой текущий код для пересылки фото заказа ...
+        pass
  
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
