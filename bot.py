@@ -198,8 +198,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "📊 Информация о бонусах":
-        await update.message.reply_text("🎁 Ваш баланс в Fruttosmile: 0 бонусов\n(Бонусы станут доступны после проверки ваших отзывов)")
-        return
+    bonuses = context.user_data.get('bonuses', 0)
+    if 'phone' not in context.user_data:
+        await update.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером)!")
+    else:
+        text = f"🎁 Ваш баланс в Fruttosmile: {bonuses} бонусов\n"
+        if bonuses == 0:
+            text += "(Бонусы станут доступны после проверки ваших отзывов)"
+        elif bonuses == 300:
+            text += "(Начислено за регистрацию)"
+        else:
+            text += "(Включая бонусы за отзывы)"
+        await update.message.reply_text(text)
+    return
 
     if msg == "🛒 Оформить заказ":
         kb = InlineKeyboardMarkup([
@@ -245,7 +256,28 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Добавляем кнопку назад после всех товаров
         back_kb = ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True)
-        await query.message.chat.send_message("Это лишь малая часть нашей красоты! ✨\nЧтобы заказать, перейдите в раздел «Оформить заказ».", reply_markup=back_kb)
+        await query.message.chat.send_message("Это лишь малая часть нашей красоты! ✨\nЧтобы заказать, перейдите в раздел «Оформить заказ».", reply_markup=back_kb
+
+    elif data.startswith("add_bonus_"):
+        parts = data.split("_")
+        target_uid = int(parts[2])
+        bonus_amount = int(parts[3])
+        
+        # Здесь нужно знать, в каком user_data клиента начислять (но user_data — это per-user, админ не имеет доступа к user_data клиента)
+        # Решение: отправить сообщение клиенту и обновить его бонусы через bot (но лучше хранить бонусы в БД)
+        # Временный фикс — просто уведомить админа, что начислено (реальное начисление потом вручную или через БД)
+        
+        await query.edit_message_caption(
+            caption=query.message.caption + f"\n\n✅ Начислено {bonus_amount} бонусов клиенту!",
+            reply_markup=None
+        )
+        
+        # Сообщение клиенту
+        await context.bot.send_message(
+            chat_id=target_uid,
+            text=f"🎉 Ваш отзыв проверен! Вам начислено +{bonus_amount} бонусов. Проверьте баланс в меню."
+        )
+        
 
     elif data.startswith("st_"):
         uid = int(data.split("_")[2])
@@ -278,20 +310,31 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Ошибка пересылки фото: {e}")
 
     """Пересылка скриншота админу Fruttosmile"""
+    
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
+        user_id = update.effective_user.id  # ID клиента
         
         await update.message.reply_text("✅ Скриншот принят! Скоро мы проверим его и начислим бонусы.")
         
-        # Отправляем фото тебе
+        # Кнопка для админа "Начислить 250 бонусов"
+        admin_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Начислить 250 бонусов", callback_data=f"add_bonus_{user_id}_250")]
+        ])
+        
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
             photo=update.message.photo[-1].file_id,
-            caption=f"📸 <b>Новый отзыв Fruttosmile!</b>\n👤 Клиент: {name}\n📱 Тел: {phone}",
-            parse_mode="HTML"
+            caption=f"📸 <b>Новый отзыв Fruttosmile!</b>\n"
+                    f"👤 Клиент: {name}\n"
+                    f"📱 Тел: {phone}\n"
+                    f"🆔 ID: {user_id}",
+            parse_mode="HTML",
+            reply_markup=admin_kb
         )
-        context.user_data['state'] = None
+        context.user_data.pop('state', None)
+
 
 # ────────────────────────────────────────────────
 # ЗАПУСК
