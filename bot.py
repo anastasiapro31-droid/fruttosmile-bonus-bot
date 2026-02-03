@@ -231,24 +231,33 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.chat.send_message("Для заказа вернитесь в меню.", reply_markup=ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True))
     
  # Обработка одобрения отзыва
-    if data.startswith("rev_approve_"):
-        client_id = int(data.split("_")[2])
+    elif query.data.startswith("rev_"):
+        parts = query.data.split("_")
+        action = parts[1]  # approve или reject
+        client_id = int(parts[2])
         
-        # В этой версии мы отправляем уведомление клиенту. 
-        # Чтобы бонусы сохранились, в идеале нужна БД, но для начала 
-        # мы просто подтверждаем действие для админа:
-        await query.edit_message_caption(
-            caption=query.message.caption + "\n\n🟢 <b>ОДОБРЕНО: +250 бонусов начислено!</b>",
-            parse_mode="HTML",
-            reply_markup=None
-        )
+        # Получаем данные пользователя, которому начисляем
+        # В библиотеке python-telegram-bot мы можем обратиться к контексту этого юзера
+        if action == "approve":
+            # Находим текущие бонусы клиента и прибавляем 250
+            current_bonuses = context.application.user_data.get(client_id, {}).get('bonuses', 300)
+            new_total = current_bonuses + 250
+            
+            # Сохраняем новое значение
+            if client_id not in context.application.user_data:
+                context.application.user_data[client_id] = {}
+            context.application.user_data[client_id]['bonuses'] = new_total
+            
+            await context.bot.send_message(
+                chat_id=client_id, 
+                text=f"🎁 Поздравляем! Ваш отзыв проверен. Вам начислено 250 бонусов! Ваш новый баланс: {new_total}"
+            )
+            await query.edit_message_caption(caption=query.message.caption + f"\n\n✅ ОДОБРЕНО: Баланс клиента теперь {new_total}")
         
-        # Уведомляем клиента (в его боте высветится сообщение)
-        await context.bot.send_message(
-            chat_id=client_id,
-            text="🎁 Поздравляем! Ваш отзыв прошел модерацию. Вам начислено 250 бонусов! ✨"
-        )
-
+        elif action == "reject":
+            await context.bot.send_message(chat_id=client_id, text="❌ К сожалению, отзыв не прошел модерацию.")
+            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО")
+         
     # Обработка отклонения отзыва
     elif data.startswith("rev_reject_"):
         client_id = int(data.split("_")[2])
