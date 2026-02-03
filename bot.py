@@ -279,35 +279,44 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text=msg)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Если клиент прислал скриншот отзыва
+    user_id = update.effective_user.id
+    message = update.message
+
+    # 1. ЛОГИКА ДЛЯ АДМИНА: Пересылка фото заказа клиенту
+    if user_id == ADMIN_ID and message.reply_to_message:
+        # Пытаемся вытащить ID клиента из текста сообщения, на которое ответил админ
+        try:
+            # Ищем цифры после "🆔 ID:" или просто длинное число в тексте
+            text = message.reply_to_message.caption or message.reply_to_message.text
+            target_id = int(re.search(r"ID: (\d+)", text).group(1))
+            
+            # Отправляем фото клиенту
+            await context.bot.send_photo(
+                chat_id=target_id,
+                photo=message.photo[-1].file_id,
+                caption="✨ Ваше фото заказа готово! Приятного аппетита! 🍓"
+            )
+            await message.reply_text("✅ Фото успешно отправлено клиенту!")
+            return
+        except Exception as e:
+            await message.reply_text(f"❌ Не удалось определить ID клиента. Ошибка: {e}")
+            return
+
+    # 2. ЛОГИКА ДЛЯ КЛИЕНТА: Получение скриншота отзыва
     if context.user_data.get('state') == 'WAIT_REVIEW':
-        user = update.effective_user
-        photo_id = update.message.photo[-1].file_id
-        
-        await update.message.reply_text("✅ Скриншот принят! Мы начислим бонусы после проверки модератором.")
-        
-        # Кнопки для админа
         admin_kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_approve_{user.id}"),
-                InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_reject_{user.id}")
-            ]
+            [InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_approve_{user_id}"),
+             InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_reject_{user_id}")]
         ])
-        
+        await message.reply_text("✅ Скриншот принят на модерацию!")
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
-            photo=photo_id,
-            caption=f"📸 <b>НОВЫЙ ОТЗЫВ</b>\n👤 От: {user.full_name}\n🆔 ID: {user.id}\n📱 Тел: {context.user_data.get('phone', 'не указан')}",
-            parse_mode="HTML",
+            photo=message.photo[-1].file_id,
+            caption=f"📸 НОВЫЙ ОТЗЫВ\n👤 {update.effective_user.full_name}\n🆔 ID: {user_id}",
             reply_markup=admin_kb
         )
         context.user_data['state'] = None
-        return
 
-    # 2. Если админ отвечает на запрос фото (как было раньше)
-    if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
-        # ... твой текущий код для пересылки фото заказа ...
-        pass
  
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
