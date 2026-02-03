@@ -257,35 +257,35 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text=txt)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    message = update.message
+    if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
+        try:
+            text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
+            # Более гибкая регулярка: ищем любой номер после "ID:" или "🆔"
+            match = re.search(r'(?:ID:|🆔)\s*(\d+)', text)
+            if match:
+                tid = int(match.group(1))
+                await context.bot.send_photo(
+                    chat_id=tid,
+                    photo=update.message.photo[-1].file_id,
+                    caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
+                )
+                await update.message.reply_text(f"✅ Фото отправлено клиенту (ID: {tid})")
+            else:
+                await update.message.reply_text("❌ Не удалось найти ID клиента в сообщении.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка отправки фото: {str(e)}")
+        return
 
-    # Логика для пересылки фото заказа клиенту (от админа)
-    if user_id == ADMIN_ID and message.reply_to_message:
-        reply_text = message.reply_to_message.text
-        match = re.search(r'🆔 ID: (\d+)', reply_text)
-        if match:
-            client_id = int(match.group(1))
-            photo_id = message.photo[-1].file_id
-            await context.bot.send_photo(
-                chat_id=client_id,
-                photo=photo_id,
-                caption="📸 Фото вашего заказа! Спасибо за выбор Fruttosmile 🍓"
-            )
-            await message.reply_text("✅ Фото успешно отправлено клиенту!")
-            return
-
-    # Логика для скриншота отзыва (от клиента)
+    # Остальная часть (отзывы) остаётся как есть
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
         
         await update.message.reply_text("✅ Скриншот принят! Скоро мы проверим его и начислим бонусы.")
         
-        # Отправляем фото админу
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
-            photo=message.photo[-1].file_id,
+            photo=update.message.photo[-1].file_id,
             caption=f"📸 <b>Новый отзыв Fruttosmile!</b>\n👤 Клиент: {name}\n📱 Тел: {phone}",
             parse_mode="HTML"
         )
