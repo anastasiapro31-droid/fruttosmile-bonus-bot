@@ -259,24 +259,28 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
         try:
-            text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-            # Более гибкая регулярка: ищем любой номер после "ID:" или "🆔"
-            match = re.search(r'(?:ID:|🆔)\s*(\d+)', text)
+            # Берём текст или подпись сообщения, на которое отвечаем
+            reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
+            
+            # Гибкая регулярка: ловит любой номер после "ID:", "🆔", "Telegram ID:" и т.д.
+            match = re.search(r'(?:ID:|🆔|Telegram ID:)\s*(\d+)', reply_text, re.IGNORECASE)
+            
             if match:
-                tid = int(match.group(1))
+                target_id = int(match.group(1))
                 await context.bot.send_photo(
-                    chat_id=tid,
+                    chat_id=target_id,
                     photo=update.message.photo[-1].file_id,
                     caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
                 )
-                await update.message.reply_text(f"✅ Фото отправлено клиенту (ID: {tid})")
+                # Подтверждение для админа
+                await update.message.reply_text(f"✅ Фото успешно отправлено клиенту (ID: {target_id})")
             else:
-                await update.message.reply_text("❌ Не удалось найти ID клиента в сообщении.")
+                await update.message.reply_text("❌ Не удалось найти ID клиента в сообщении. Убедитесь, что отвечаете именно на запрос с ID.")
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка отправки фото: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка при отправке фото: {str(e)}")
         return
 
-    # Остальная часть (отзывы) остаётся как есть
+    # Логика для отзывов (остаётся без изменений)
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
