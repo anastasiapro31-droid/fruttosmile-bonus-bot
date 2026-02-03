@@ -198,25 +198,18 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "📊 Информация о бонусах":
-    bonuses = context.user_data.get('bonuses', 0)
-    if 'phone' not in context.user_data:
-        await update.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером)!")
-    else:
-        text = f"🎁 Ваш баланс в Fruttosmile: {bonuses} бонусов\n"
-        if bonuses == 0:
-            text += "(Бонусы станут доступны после проверки ваших отзывов)"
-        elif bonuses == 300:
-            text += "(Начислено за регистрацию)"
+        bonuses = context.user_data.get('bonuses', 0)
+        if 'phone' not in context.user_data:
+            await update.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером)!")
         else:
-            text += "(Включая бонусы за отзывы)"
-        await update.message.reply_text(text)
-    return
-
-    if msg == "🛒 Оформить заказ":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Оформить на сайте", url="https://fruttosmile.ru/")]
-        ])
-        await update.message.reply_text("Перейдите на сайт для оформления заказа 🍓", reply_markup=kb)
+            text = f"🎁 Ваш баланс в Fruttosmile: {bonuses} бонусов\n"
+            if bonuses == 0:
+                text += "(Бонусы станут доступны после проверки ваших отзывов)"
+            elif bonuses == 300:
+                text += "(Начислено за регистрацию)"
+            else:
+                text += "(Включая бонусы за отзывы)"
+            await update.message.reply_text(text)
         return
 
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
