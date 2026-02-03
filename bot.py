@@ -170,11 +170,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
  
     if msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
-        kb = [[InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/"), 
-               InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/"), 
-               InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865"), 
-               InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]]
-        await update.message.reply_text("⭐ Оставьте отзыв и пришлите скриншот сюда для получения 250 бонусов!", reply_markup=InlineKeyboardMarkup(kb))
+        kb = [
+            [
+                InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/"), 
+                InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/")
+            ],
+            [
+                InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211"), 
+                InlineKeyboardButton("VK", url="https://vk.com/fruttosmile")
+            ]
+        ]
+        await update.message.reply_text(
+            "⭐ Оставьте отзыв о Fruttosmile на любой площадке и пришлите скриншот сюда.\n\n"
+            "После модерации мы начислим вам 250 бонусов! 📸",
+            reply_markup=InlineKeyboardMarkup(kb)
+        )
         return
  
     if msg == "📍 Адреса самовывоза":
