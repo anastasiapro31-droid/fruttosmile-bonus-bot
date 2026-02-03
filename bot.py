@@ -3,7 +3,7 @@ import os
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-
+ 
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -19,26 +19,26 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-
+ 
 # ────────────────────────────────────────────────
 # КОНФИГУРАЦИЯ
 # ────────────────────────────────────────────────
-
+ 
 BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← обязательно заменить!
-ADMIN_ID = 1165444045                               # ← ID менеджера
-
+ADMIN_ID = 1165444045             # ← ID менеджера
+ 
 # Health check сервер для Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-
+ 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
-
+ 
 # ================= ВЫБРАННЫЙ КАТАЛОГ ТОВАРОВ =================
 PRODUCTS = {
     "boxes": [
@@ -64,11 +64,11 @@ PRODUCTS = {
         {"name": "Мужская корзина «Брутал»", "price": "12990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/03/whatsapp202023_10_1620v2014.38.08_14f00b4d_481x582.jpg"}
     ]
 }
-
+ 
 # ────────────────────────────────────────────────
 # ФУНКЦИИ
 # ────────────────────────────────────────────────
-
+ 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = ReplyKeyboardMarkup([
         ["📊 Информация о бонусах", "📖 Каталог товаров"],
@@ -77,28 +77,25 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ], resize_keyboard=True)
     msg = "Выберите действие в меню FruttoSmile: 🍓"
     await update.effective_message.reply_text(msg, reply_markup=kb)
-
+ 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = KeyboardButton("📲 Регистрация и +300 бонусов", request_contact=True)
     await update.message.reply_text(
         "🍓 Добро пожаловать!\n\nДля активации бонусов нажмите кнопку ниже 👇",
         reply_markup=ReplyKeyboardMarkup([[btn]], resize_keyboard=True, one_time_keyboard=True)
     )
-
+ 
 async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
     uid = update.effective_user.id
     user = update.effective_user
-
+ 
     first_name = user.first_name or "не указано"
     last_name  = user.last_name  or ""
     username   = user.username   or "нет"
-
     full_name = f"{first_name} {last_name}".strip()
-
-    await update.effective_message.reply_text(
-        "🔍 Запрос отправлен менеджеру!\nМы сообщим вам, когда статус изменится."
-    )
-
+ 
+    await update.effective_message.reply_text("🔍 Запрос отправлен менеджеру!\nМы сообщим вам, когда статус изменится.")
+ 
     admin_kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Готов",    callback_data=f"st_ready_{uid}"),
@@ -106,7 +103,7 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
             InlineKeyboardButton("❌ Заказа нет", callback_data=f"st_none_{uid}")
         ]
     ])
-
+ 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
@@ -118,21 +115,21 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ),
         reply_markup=admin_kb
     )
-
     context.user_data.pop('state', None)
-
+ 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
     state = context.user_data.get('state')
-
+ 
     if state == 'WAIT_ORDER':
         await process_photo_request(update, context, phone)
     else:
         context.user_data['phone'] = phone
-        context.user_data['bonuses'] = context.user_data.get('bonuses', 0) + 300
-        await update.message.reply_text("🎉 Регистрация успешна! +300 бонусов.")
+        # Устанавливаем ровно 300 бонусов при регистрации
+        context.user_data['bonuses'] = 300
+        await update.message.reply_text("🎉 Регистрация успешна! Вам начислено 300 бонусов.")
         await send_main_menu(update, context)
-
+ 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'phone' not in context.user_data:
         btn = KeyboardButton("📲 Подтвердить номер", request_contact=True)
@@ -142,34 +139,25 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
         )
         context.user_data['state'] = 'WAIT_ORDER'
         return
-
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ Да, запросить", callback_data="confirm_photo_request"),
-            InlineKeyboardButton("❌ Отмена",        callback_data="cancel_photo_request")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.effective_message.reply_text(
-        "Запросить фото заказа у менеджера?",
-        reply_markup=reply_markup
-    )
+ 
+    keyboard = [[InlineKeyboardButton("✅ Да, запросить", callback_data="confirm_photo_request"),
+                 InlineKeyboardButton("❌ Отмена", callback_data="cancel_photo_request")]]
+    
+    await update.effective_message.reply_text("Запросить фото заказа у менеджера?", reply_markup=InlineKeyboardMarkup(keyboard))
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
-
+ 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
-    state = context.user_data.get('state')
-
+ 
     if msg == "⬅️ Назад":
         context.user_data.pop('state', None)
         await send_main_menu(update, context)
         return
-
+ 
     if msg == "📸 Получить фото заказа":
         await show_photo_confirmation(update, context)
         return
-
+ 
     if msg == "📖 Каталог товаров":
         kb = [
             [InlineKeyboardButton("🎁 Подарочные боксы", callback_data="cat_boxes")],
@@ -177,175 +165,94 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💐 Цветы", callback_data="cat_flowers")],
             [InlineKeyboardButton("🍖 Мужские букеты", callback_data="cat_meat")]
         ]
-        await update.message.reply_text("Выберите категорию для просмотра нашего ассортимента:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
         return
-
+ 
     if msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
-        kb = [
-            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/?ll=104.353133%2C52.259946&z=14"), InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/104.353179%2C52.259892")],
-            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865"), InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]
-        ]
-        await update.message.reply_text(
-            "⭐ Оставьте отзыв о Fruttosmile на любой площадке и пришлите скриншот сюда.\n\n"
-            "После модерации мы начислим вам 250 бонусов! 📸",
-            reply_markup=InlineKeyboardMarkup(kb)
-        )
+        kb = [[InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/"), 
+               InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/")]]
+        await update.message.reply_text("⭐ Оставьте отзыв и пришлите скриншот сюда для получения 250 бонусов!", reply_markup=InlineKeyboardMarkup(kb))
         return
-
+ 
     if msg == "📍 Адреса самовывоза":
-        await update.message.reply_text("📍 Мы ждем вас по адресу: [Иркутск, Улица Дыбовского, 8/5]\n⏰ Работаем каждый день с 09:00 до 20:00")
+        await update.message.reply_text("📍 Иркутск, Улица Дыбовского, 8/5\n⏰ 09:00 - 20:00")
         return
-
+ 
     if msg == "📊 Информация о бонусах":
         bonuses = context.user_data.get('bonuses', 0)
         if 'phone' not in context.user_data:
             await update.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером)!")
         else:
             text = f"🎁 Ваш баланс в Fruttosmile: {bonuses} бонусов\n"
-            if bonuses == 0:
-                text += "(Бонусы станут доступны после проверки ваших отзывов)"
-            elif bonuses == 300:
-                text += "(Начислено за регистрацию)"
-            else:
-                text += "(Включая бонусы за отзывы)"
+            text += "(Начислено за регистрацию)" if bonuses == 300 else "(Включая бонусы за отзывы)"
             await update.message.reply_text(text)
         return
+    
+    if msg == "🛒 Оформить заказ":
+        kb = [[InlineKeyboardButton("🛍 Перейти на сайт", url="https://fruttosmile.ru")]]
+        await update.message.reply_text("Оформить заказ можно на сайте:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
+ 
     if data == "confirm_photo_request":
         phone = context.user_data.get('phone')
-        if not phone:
-            await query.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером).")
-            return
-
         await process_photo_request(update, context, phone)
         await query.edit_message_text("✅ Запрос отправлен менеджеру!")
-
+ 
     elif data == "cancel_photo_request":
         await query.edit_message_text("Запрос отменён.")
-        context.user_data.pop('state', None)
         await send_main_menu(update, context)
-
+ 
     elif data.startswith("cat_"):
         category = data.replace("cat_", "")
         products = PRODUCTS.get(category, [])
-        
-        # Удаляем сообщение с выбором категорий
         await query.message.delete()
-        
-        # Отправляем товары по одному
         for p in products:
-            caption = f"<b>{p['name']}</b>\n💰 Цена: {p['price']}₽"
             try:
-                await query.message.chat.send_photo(photo=p['photo'], caption=caption, parse_mode="HTML")
-            except Exception as e:
-                # Если ссылка на фото битая, отправим просто текст
-                await query.message.chat.send_message(f"⚠️ Ошибка загрузки фото для: {p['name']}\n{caption}", parse_mode="HTML")
-
-        # Добавляем кнопку назад после всех товаров
-        back_kb = ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True)
-        await query.message.chat.send_message("Это лишь малая часть нашей красоты! ✨\nЧтобы заказать, перейдите в раздел «Оформить заказ».", reply_markup=back_kb
-
-    elif data.startswith("add_bonus_"):
-        parts = data.split("_")
-        target_uid = int(parts[2])
-        bonus_amount = int(parts[3])
-        
-        # Здесь нужно знать, в каком user_data клиента начислять (но user_data — это per-user, админ не имеет доступа к user_data клиента)
-        # Решение: отправить сообщение клиенту и обновить его бонусы через bot (но лучше хранить бонусы в БД)
-        # Временный фикс — просто уведомить админа, что начислено (реальное начисление потом вручную или через БД)
-        
-        await query.edit_message_caption(
-            caption=query.message.caption + f"\n\n✅ Начислено {bonus_amount} бонусов клиенту!",
-            reply_markup=None
-        )
-        
-        # Сообщение клиенту
-        await context.bot.send_message(
-            chat_id=target_uid,
-            text=f"🎉 Ваш отзыв проверен! Вам начислено +{bonus_amount} бонусов. Проверьте баланс в меню."
-        )
-        
-
+                await query.message.chat.send_photo(photo=p['photo'], caption=f"<b>{p['name']}</b>\n💰 {p['price']}₽", parse_mode="HTML")
+            except:
+                await query.message.chat.send_message(f"📦 {p['name']} - {p['price']}₽")
+        await query.message.chat.send_message("Для заказа вернитесь в меню.", reply_markup=ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True))
+ 
     elif data.startswith("st_"):
         uid = int(data.split("_")[2])
-        if "ready" in data:
-            txt = "✅ Заказ готов! Фото скоро придёт."
-        elif "work" in data:
-            txt = "⏳ Заказ в работе."
-        else:
-            txt = "❌ Заказ не найден."
-        await context.bot.send_message(chat_id=uid, text=txt)
+        msg = "✅ Заказ готов!" if "ready" in data else "⏳ Заказ в работе." if "work" in data else "❌ Заказ не найден."
+        await context.bot.send_message(chat_id=uid, text=msg)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    if not update.message.reply_to_message:
-        return
-
-    try:
-        text = update.message.reply_to_message.text
-        match = re.search(r'🆔 Telegram ID: (\d+)', text)
-        if match:
-            tid = int(match.group(1))
-            photo = update.message.photo[-1].file_id
-            await context.bot.send_photo(
-                chat_id=tid,
-                photo=photo,
-                caption="📸 Фото вашего заказа готово!"
-            )
-    except Exception as e:
-        print(f"Ошибка пересылки фото: {e}")
-
-    """Пересылка скриншота админу Fruttosmile"""
-    
+    # Если это отзыв от клиента
     if context.user_data.get('state') == 'WAIT_REVIEW':
-        phone = context.user_data.get('phone', 'Не указан')
-        name = update.message.from_user.full_name
-        user_id = update.effective_user.id  # ID клиента
-        
-        await update.message.reply_text("✅ Скриншот принят! Скоро мы проверим его и начислим бонусы.")
-        
-        # Кнопка для админа "Начислить 250 бонусов"
-        admin_kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Начислить 250 бонусов", callback_data=f"add_bonus_{user_id}_250")]
-        ])
-        
-        await context.bot.send_photo(
-            chat_id=ADMIN_ID,
-            photo=update.message.photo[-1].file_id,
-            caption=f"📸 <b>Новый отзыв Fruttosmile!</b>\n"
-                    f"👤 Клиент: {name}\n"
-                    f"📱 Тел: {phone}\n"
-                    f"🆔 ID: {user_id}",
-            parse_mode="HTML",
-            reply_markup=admin_kb
-        )
+        await update.message.reply_text("✅ Скриншот принят! Мы начислим бонусы после проверки.")
+        await context.bot.send_photo(chat_id=ADMIN_ID, photo=update.message.photo[-1].file_id, 
+                                     caption=f"📸 ОТЗЫВ от {update.message.from_user.full_name}\n🆔 ID: {update.effective_user.id}")
         context.user_data.pop('state', None)
+        return
 
-
-# ────────────────────────────────────────────────
-# ЗАПУСК
-# ────────────────────────────────────────────────
-
+    # Если это ответ админа (фото заказа клиенту)
+    if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
+        try:
+            text = update.message.reply_to_message.text
+            match = re.search(r'🆔 Telegram ID: (\d+)', text)
+            if match:
+                tid = int(match.group(1))
+                await context.bot.send_photo(chat_id=tid, photo=update.message.photo[-1].file_id, caption="📸 Фото вашего заказа готово!")
+                await update.message.reply_text("✅ Отправлено клиенту!")
+        except:
+            await update.message.reply_text("Ошибка отправки.")
+ 
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(CallbackQueryHandler(query_handler))
-
-    print("Бот запущен...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    app.run_polling()
+ 
 if __name__ == "__main__":
     main()
