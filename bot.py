@@ -83,18 +83,19 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ]
     ])
 
-    # Убрали Markdown, чтобы не было ошибок парсинга
+    # ЧИСТЫЙ ТЕКСТ БЕЗ ЛЮБОГО parse_mode !!!
+    message_text = (
+        "🔔 ЗАПРОС ФОТО ЗАКАЗА\n"
+        f"👤 Имя: {full_name}\n"
+        f"📱 Телефон: {phone}\n"
+        f"🆔 Telegram ID: {uid}\n"
+        f"@{username}"
+    )
+
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=(
-            f"🔔 *ЗАПРОС ФОТО ЗАКАЗА*\n"   # * вместо **
-            f"👤 Имя: {full_name.replace('_', '\\_').replace('*', '\\*')}\n"  # экранируем опасные символы
-            f"📱 Телефон: {phone}\n"
-            f"🆔 Telegram ID: {uid}\n"
-            f"@{username}"
-        ),
-        parse_mode="MarkdownV2"
-
+        text=message_text,
+        reply_markup=admin_kb
     )
 
     context.user_data.pop('state', None)
