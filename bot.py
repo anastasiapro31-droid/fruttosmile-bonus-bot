@@ -282,19 +282,19 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     message = update.message
 
-    # 1. ЛОГИКА ДЛЯ АДМИНА: Пересылка фото заказа клиенту
+    # 1. ЛОГИКА ДЛЯ АДМИНА: Ответ клиенту на запрос фото
     if user_id == ADMIN_ID and message.reply_to_message:
-        # Пытаемся достать ID клиента из сообщения, на которое отвечаем
+        # Получаем текст сообщения, на которое отвечаем (Reply)
         reply = message.reply_to_message
         source_text = reply.caption or reply.text or ""
         
-        # Ищем любое число из 9-10 знаков (это обычно ID Телеграм)
-        match = re.search(r"(\d{8,12})", source_text)
+        # Ищем ID в тексте (сработает для "Telegram ID: 453054874")
+        match = re.search(r"ID:\s*(\d+)", source_text)
         
         if match:
             target_id = int(match.group(1))
             try:
-                # Отправляем фото клиенту
+                # Отправляем именно присланное фото клиенту
                 await context.bot.send_photo(
                     chat_id=target_id,
                     photo=message.photo[-1].file_id,
@@ -303,16 +303,26 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(f"✅ Фото успешно отправлено клиенту (ID: {target_id})")
                 return
             except Exception as e:
-                await message.reply_text(f"❌ Ошибка при отправке клиенту: {e}")
+                await message.reply_text(f"❌ Ошибка отправки: {e}")
                 return
         else:
-            await message.reply_text("❌ Не нашел ID клиента в сообщении. Убедитесь, что в тексте запроса есть цифры ID.")
+            await message.reply_text("❌ Не удалось найти ID в сообщении. Убедитесь, что отвечаете на запрос с текстом 'Telegram ID: ...'")
             return
 
-    # 2. ЛОГИКА ДЛЯ КЛИЕНТА: Получение скриншота отзыва (оставляем как было)
+    # 2. ЛОГИКА ДЛЯ КЛИЕНТА: Скриншот отзыва
     if context.user_data.get('state') == 'WAIT_REVIEW':
-        # ... (код для отзывов) ...
-
+        admin_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_approve_{user_id}"),
+             InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_reject_{user_id}")]
+        ])
+        await message.reply_text("✅ Скриншот принят на модерацию!")
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=message.photo[-1].file_id,
+            caption=f"📸 НОВЫЙ ОТЗЫВ\n👤 {update.effective_user.full_name}\n🆔 Telegram ID: {user_id}",
+            reply_markup=admin_kb
+        )
+        context.user_data['state'] = None
  
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
