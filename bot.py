@@ -26,6 +26,9 @@ from telegram.ext import (
 
 BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← обязательно заменить!
 ADMIN_ID = 1165444045             # ← ID менеджера
+# храним соответствие: сообщение менеджеру → клиент
+ADMIN_REQUESTS = {}
+
 
 # Health check сервер для Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -104,7 +107,7 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ]
     ])
 
-    await context.bot.send_message(
+    msg = await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             f"🔔 ЗАПРОС ФОТО ЗАКАЗА\n"
@@ -115,7 +118,9 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ),
         reply_markup=admin_kb
     )
-    context.user_data.pop('state', None)
+    
+    # 🔑 сохраняем соответствие
+    ADMIN_REQUESTS[msg.message_id] = uid
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
@@ -249,7 +254,11 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(data.split("_")[2])
         if "ready" in data:
             txt = "✅ Заказ готов! Фото придёт скоро."
-            await query.edit_message_text(query.message.text + "\n\nТеперь отправьте фото в ответ на это сообщение.")
+            await query.edit_message_text(
+    query.message.text +
+    "\n\n📸 Теперь отправьте фото ОТВЕТОМ на это сообщение."
+)
+
         elif "work" in data:
             txt = "⏳ Заказ в работе!"
         else:
@@ -257,45 +266,48 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=uid, text=txt)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 1. Если сообщение от админа и это ответ (reply) на запрос клиента
-    if update.message.from_user.id == ADMIN_ID and update.message.reply_to_message:
+
+    # Фото от менеджера в ответ на запрос
+    if (
+        update.message.from_user.id == ADMIN_ID
+        and update.message.reply_to_message
+    ):
+        reply_id = update.message.reply_to_message.message_id
+
+        if reply_id not in ADMIN_REQUESTS:
+            await update.message.reply_text(
+                "❌ Это сообщение не связано с запросом клиента."
+            )
+            return
+
+        target_id = ADMIN_REQUESTS.pop(reply_id)
+
         try:
-            # Берём текст или подпись сообщения, на которое отвечают
-            reply_text = update.message.reply_to_message.text or update.message.reply_to_message.caption or ""
-            
-            # НОВАЯ гибкая регулярка: ловит любой номер после "ID:", "🆔", "Telegram ID:" и т.д.
-            # Работает с твоим форматом: "🆔 Telegram ID: 453054874"
-            match = re.search(r'(?:🆔|ID:|Telegram ID:)\s*(\d+)', reply_text, re.IGNORECASE)
-            
-            if match:
-                target_id = int(match.group(1))
-                await context.bot.send_photo(
-                    chat_id=target_id,
-                    photo=update.message.photo[-1].file_id,
-                    caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
-                )
-                # Подтверждение для админа
-                await update.message.reply_text(f"✅ Фото успешно отправлено клиенту (ID: {target_id})")
-            else:
-                await update.message.reply_text(
-                    "❌ Не удалось найти ID клиента в сообщении.\n"
-                    "Убедитесь, что отвечаете именно на запрос с ID (например, '🆔 Telegram ID: ...')"
-                )
+            await context.bot.send_photo(
+                chat_id=target_id,
+                photo=update.message.photo[-1].file_id,
+                caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
+            )
+
+            await update.message.reply_text(
+                f"✅ Фото успешно отправлено клиенту (ID: {target_id})"
+            )
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка при отправке фото: {str(e)}")
+            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
+
         return
 
-    # 2. Если это скриншот отзыва от клиента
+    # ─── Отзывы ───
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
-        
-        await update.message.reply_text("✅ Скриншот принят! Скоро мы проверим его и начислим бонусы.")
-        
+
+        await update.message.reply_text("✅ Скриншот принят! Спасибо за отзыв 💛")
+
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
             photo=update.message.photo[-1].file_id,
-            caption=f"📸 <b>Новый отзыв Fruttosmile!</b>\n👤 Клиент: {name}\n📱 Тел: {phone}",
+            caption=f"📸 <b>Новый отзыв!</b>\n👤 {name}\n📱 {phone}",
             parse_mode="HTML"
         )
         context.user_data['state'] = None
