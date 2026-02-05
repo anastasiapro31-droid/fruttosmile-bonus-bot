@@ -213,80 +213,63 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
+ 
     if data == "confirm_photo_request":
         phone = context.user_data.get('phone')
+        uid = update.effective_user.id # Исправлено: берем ID пользователя
+        
         if not phone:
             await query.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером).")
             return
-
+ 
         await process_photo_request(update, context, phone)
-        await context.bot.send_message(
+        
+        # Исправлено: сохраняем сообщение в переменную msg, чтобы получить его ID
+        msg = await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
-                query.message.text +
-                "\n\n📸 Теперь отправьте фото ОТВЕТОМ на это сообщение."
+                f"📸 Клиент подтвердил запрос фото.\n"
+                f"🆔 ID клиента: {uid}\n"
+                "Теперь отправьте фото ОТВЕТОМ на это сообщение."
             )
         )
-
-        # сохраняем новое сообщение как якорь
+        # Теперь msg.message_id существует
         ADMIN_REQUESTS[msg.message_id] = uid
-
+ 
     elif data == "cancel_photo_request":
         await query.edit_message_text("Запрос отменён.")
         context.user_data.pop('state', None)
         await send_main_menu(update, context)
 
-    elif data.startswith("cat_"):
-        category = data.replace("cat_", "")
-        products = PRODUCTS.get(category, [])
-        
-        # Удаляем сообщение с выбором категорий
-        await query.message.delete()
-        
-        # Отправляем товары по одному
-        for p in products:
-            caption = f"<b>{p['name']}</b>\n💰 Цена: {p['price']}₽"
-            try:
-                await query.message.chat.send_photo(photo=p['photo'], caption=caption, parse_mode="HTML")
-            except Exception as e:
-                # Если ссылка на фото битая, отправим просто текст
-                await query.message.chat.send_message(f"⚠️ Ошибка загрузки фото для: {p['name']}\n{caption}", parse_mode="HTML")
-
-        # Добавляем кнопку назад после всех товаров
-        back_kb = ReplyKeyboardMarkup([['⬅️ Назад']], resize_keyboard=True)
-        await query.message.chat.send_message("Это лишь малая часть нашей красоты! ✨\nЧтобы заказать, перейдите в раздел «Оформить заказ».", reply_markup=back_kb)
-
+    # Исправлено: добавил правильные отступы для блока st_
     elif data.startswith("st_"):
-    uid = int(data.split("_")[2])
-
-    if "ready" in data:
-        txt = "✅ Заказ готов! Фото придёт скоро."
-
-        # Сообщаем клиенту
-        await context.bot.send_message(chat_id=uid, text=txt)
-
-        # Сообщаем менеджеру (создаем якорь для ответа фото)
-        msg = await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                "📸 Отправьте фото заказа ОТВЕТОМ на это сообщение.\n\n"
-                f"🆔 ID клиента: {uid}"
+        parts = data.split("_")
+        uid = int(parts[2])
+ 
+        if "ready" in data:
+            txt = "✅ Заказ готов! Фото придёт скоро."
+            await context.bot.send_message(chat_id=uid, text=txt)
+     
+            msg = await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    "📸 Отправьте фото заказа ОТВЕТОМ на это сообщение.\n\n"
+                    f"🆔 ID клиента: {uid}"
+                )
             )
-        )
+            ADMIN_REQUESTS[msg.message_id] = uid
+            await query.answer("Ожидаю фото от менеджера ✅")
+     
+        elif "work" in data:
+            txt = "⏳ Заказ в работе!"
+            await context.bot.send_message(chat_id=uid, text=txt)
+            await query.answer("Статус обновлен")
+     
+        else:
+            txt = "❌ Заказ не найден."
+            await context.bot.send_message(chat_id=uid, text=txt)
+            await query.answer("Статус обновлен")
 
-        # сохраняем связь якоря и клиента
-        ADMIN_REQUESTS[msg.message_id] = uid
-
-        await query.answer("Ожидаю фото от менеджера ✅")
-
-    elif "work" in data:
-        txt = "⏳ Заказ в работе!"
-        await context.bot.send_message(chat_id=uid, text=txt)
-
-    else:
-        txt = "❌ Заказ не найден."
-        await context.bot.send_message(chat_id=uid, text=txt)
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
