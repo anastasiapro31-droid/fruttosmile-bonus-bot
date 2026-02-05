@@ -28,7 +28,7 @@ from telegram.ext import (
 BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← обязательно заменить!
 ADMIN_ID = 1165444045             # ← ID менеджера
 # храним соответствие: сообщение менеджеру → клиент
-ADMIN_REQUESTS = {}
+ADMIN_LAST_REQUESTS = {}
 
 
 # Health check сервер для Render
@@ -69,9 +69,9 @@ PRODUCTS = {
     ]
 }
 
-# ────────────────────────────────────────────────
-# ФУНКЦИИ
-# ────────────────────────────────────────────────
+# ========================================================
+#  ФУНКЦИИ
+# ========================================================
 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = ReplyKeyboardMarkup([
@@ -82,12 +82,14 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "Выберите действие в меню FruttoSmile: 🍓"
     await update.effective_message.reply_text(msg, reply_markup=kb)
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = KeyboardButton("📲 Регистрация и +300 бонусов", request_contact=True)
     await update.message.reply_text(
         "🍓 Добро пожаловать!\n\nДля активации бонусов нажмите кнопку ниже 👇",
         reply_markup=ReplyKeyboardMarkup([[btn]], resize_keyboard=True, one_time_keyboard=True)
     )
+
 
 async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
     uid = update.effective_user.id
@@ -98,7 +100,9 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
     username   = user.username   or "нет"
     full_name = f"{first_name} {last_name}".strip()
 
-    await update.effective_message.reply_text("🔍 Запрос отправлен менеджеру!\nМы сообщим вам, когда статус изменится.")
+    await update.effective_message.reply_text(
+        "🔍 Запрос отправлен менеджеру!\nМы сообщим вам, когда статус изменится."
+    )
 
     admin_kb = InlineKeyboardMarkup([
         [
@@ -120,6 +124,7 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=admin_kb
     )
 
+
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
     state = context.user_data.get('state')
@@ -131,6 +136,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['bonuses'] = 300
         await update.message.reply_text("🎉 Регистрация успешна! Вам начислено 300 бонусов.")
         await send_main_menu(update, context)
+
 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'phone' not in context.user_data:
@@ -153,6 +159,7 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
+
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
@@ -209,101 +216,103 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Перейдите на сайт для оформления заказа 🍓", reply_markup=kb)
         return
 
+
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
- 
+
     if data == "confirm_photo_request":
         phone = context.user_data.get('phone')
-        uid = update.effective_user.id # Исправлено: берем ID пользователя
+        uid = update.effective_user.id
         
         if not phone:
             await query.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером).")
             return
- 
+
         await process_photo_request(update, context, phone)
-        
-        # Исправлено: сохраняем сообщение в переменную msg, чтобы получить его ID
-        msg = await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=(
-                f"📸 Клиент подтвердил запрос фото.\n"
-                f"🆔 ID клиента: {uid}\n"
-                "Теперь отправьте фото ОТВЕТОМ на это сообщение."
-            )
+
+        # Запоминаем, что ждём фото для этого клиента
+        ADMIN_LAST_REQUEST[ADMIN_ID] = uid
+
+        await query.message.reply_text(
+            "✅ Запрос отправлен.\nМенеджер пришлёт фото, как только заказ будет готов."
         )
-        # Теперь msg.message_id существует
-        ADMIN_REQUESTS[msg.message_id] = uid
- 
+        context.user_data.pop('state', None)
+
     elif data == "cancel_photo_request":
         await query.edit_message_text("Запрос отменён.")
         context.user_data.pop('state', None)
         await send_main_menu(update, context)
 
-    # Исправлено: добавил правильные отступы для блока st_
     elif data.startswith("st_"):
         parts = data.split("_")
+        if len(parts) < 3:
+            await query.answer("Ошибка в данных", show_alert=True)
+            return
+
         uid = int(parts[2])
- 
+
         if "ready" in data:
             txt = "✅ Заказ готов! Фото придёт скоро."
             await context.bot.send_message(chat_id=uid, text=txt)
-     
-            msg = await context.bot.send_message(
+
+            # Запоминаем клиента, для которого ждём фото
+            ADMIN_LAST_REQUEST[ADMIN_ID] = uid
+
+            await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
-                    "📸 Отправьте фото заказа ОТВЕТОМ на это сообщение.\n\n"
-                    f"🆔 ID клиента: {uid}"
-                )
+                    "📸 **Отправьте фото заказа** (просто прикрепите фото в этот чат)\n"
+                    f"Оно будет автоматически отправлено клиенту (ID: {uid})"
+                ),
+                parse_mode="Markdown"
             )
-            ADMIN_REQUESTS[msg.message_id] = uid
-            await query.answer("Ожидаю фото от менеджера ✅")
-     
+            await query.answer("Ожидаю фото от вас ✅")
+
         elif "work" in data:
             txt = "⏳ Заказ в работе!"
             await context.bot.send_message(chat_id=uid, text=txt)
-            await query.answer("Статус обновлен")
-     
+            await query.answer("Статус обновлён")
+
         else:
             txt = "❌ Заказ не найден."
             await context.bot.send_message(chat_id=uid, text=txt)
-            await query.answer("Статус обновлен")
+            await query.answer("Статус обновлён")
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    user_id = message.from_user.id
 
-    # Фото от менеджера в ответ на запрос
-    if (
-        update.message.from_user.id == ADMIN_ID
-        and update.message.reply_to_message
-    ):
-        reply_id = update.message.reply_to_message.message_id
+    # Фото от администратора
+    if user_id == ADMIN_ID and message.photo:
+        target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
 
-        if reply_id not in ADMIN_REQUESTS:
-            await update.message.reply_text(
-                "❌ Это сообщение не связано с запросом клиента."
-            )
+        if not target_id:
+            await message.reply_text("❌ Сейчас нет активного запроса на отправку фото.")
             return
-
-        target_id = ADMIN_REQUESTS.pop(reply_id)
 
         try:
             await context.bot.send_photo(
                 chat_id=target_id,
-                photo=update.message.photo[-1].file_id,
+                photo=message.photo[-1].file_id,
                 caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
             )
 
-            await update.message.reply_text(
+            await message.reply_text(
                 f"✅ Фото успешно отправлено клиенту (ID: {target_id})"
             )
+
+            # Очищаем — больше не ждём фото для этого клиента
+            del ADMIN_LAST_REQUEST[ADMIN_ID]
+
         except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка отправки: {e}")
+            await message.reply_text(f"❌ Ошибка при отправке фото: {str(e)}")
 
         return
 
-    # ─── Отзывы ───
+    # Обработка скриншотов отзывов
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
@@ -318,6 +327,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['state'] = None
 
+
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
 
@@ -330,6 +340,7 @@ def main():
     app.add_handler(CallbackQueryHandler(query_handler))
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
