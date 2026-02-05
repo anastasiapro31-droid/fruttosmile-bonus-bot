@@ -1,3 +1,4 @@
+
 import sys
 import os
 import re
@@ -107,7 +108,7 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ]
     ])
 
-    msg = await context.bot.send_message(
+    await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             f"🔔 ЗАПРОС ФОТО ЗАКАЗА\n"
@@ -118,9 +119,6 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ),
         reply_markup=admin_kb
     )
-    
-    # 🔑 сохраняем соответствие
-    ADMIN_REQUESTS[msg.message_id] = uid
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
@@ -223,7 +221,16 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await process_photo_request(update, context, phone)
-        await query.edit_message_text("✅ Запрос отправлен менеджеру!")
+        msg = await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=(
+                query.message.text +
+                "\n\n📸 Теперь отправьте фото ОТВЕТОМ на это сообщение."
+            )
+        )
+
+        # сохраняем новое сообщение как якорь
+        ADMIN_REQUESTS[msg.message_id] = uid
 
     elif data == "cancel_photo_request":
         await query.edit_message_text("Запрос отменён.")
