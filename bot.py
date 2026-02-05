@@ -221,7 +221,7 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         await process_photo_request(update, context, phone)
-        msg = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=(
                 query.message.text +
@@ -259,13 +259,34 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("st_"):
         uid = int(data.split("_")[2])
+    
         if "ready" in data:
             txt = "✅ Заказ готов! Фото придёт скоро."
-            await query.edit_message_text(
-    query.message.text +
-    "\n\n📸 Теперь отправьте фото ОТВЕТОМ на это сообщение."
-)
+    
+            # Сообщаем клиенту
+            await context.bot.send_message(chat_id=uid, text=txt)
+    
+            # Отправляем менеджеру сообщение-якорь, на которое он ответит фото
+            msg = await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    f"📸 Отправьте фото заказа ОТВЕТОМ на это сообщение.\n\n"
+                    f"🆔 ID клиента: {uid}"
+                )
+            )
 
+        # сохраняем связь якоря и клиента
+        ADMIN_REQUESTS[msg.message_id] = uid
+
+        await query.answer("Ожидаю фото от менеджера ✅")
+
+    elif "work" in data:
+        txt = "⏳ Заказ в работе!"
+        await context.bot.send_message(chat_id=uid, text=txt)
+
+    else:
+        txt = "❌ Заказ не найден."
+        await context.bot.send_message(chat_id=uid, text=txt)
         elif "work" in data:
             txt = "⏳ Заказ в работе!"
         else:
