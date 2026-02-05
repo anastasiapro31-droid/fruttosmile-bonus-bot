@@ -28,7 +28,7 @@ from telegram.ext import (
 BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← обязательно заменить!
 ADMIN_ID = 1165444045             # ← ID менеджера
 # храним соответствие: сообщение менеджеру → клиент
-ADMIN_LAST_REQUESTS = {}
+ADMIN_LAST_REQUEST = {}
 
 
 # Health check сервер для Render
