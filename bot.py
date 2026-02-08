@@ -332,15 +332,15 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-        # Обработка скриншотов отзывов (ИСПРАВЛЕНО: Добавлены кнопки)
+        # ОБРАБОТКА СКРИНШОТОВ (Кнопки для админа)
         if context.user_data.get('state') == 'WAIT_REVIEW':
             phone = context.user_data.get('phone', 'Не указан')
             name = update.message.from_user.full_name
             client_id = update.effective_user.id
      
-            await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов после проверки. 💛")
+            await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов. 💛")
      
-            # Создаем кнопки для тебя
+            # Добавляем кнопки
             admin_kb = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_app_{client_id}"),
@@ -356,6 +356,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=admin_kb
             )
             context.user_data['state'] = None
+
+     
+            await context.bot.send_photo(
+                chat_id=ADMIN_ID,
+                photo=update.message.photo[-1].file_id,
+                caption=f"📸 <b>Новый отзыв!</b>\n👤 {name}\n📱 {phone}",
+                parse_mode="HTML"
+            )
 
 
 def main():
