@@ -357,13 +357,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             context.user_data['state'] = None
 
-     
-            await context.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=update.message.photo[-1].file_id,
-                caption=f"📸 <b>Новый отзыв!</b>\n👤 {name}\n📱 {phone}",
-                parse_mode="HTML"
-            )
 
 
 def main():
