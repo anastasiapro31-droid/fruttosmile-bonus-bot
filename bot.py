@@ -133,10 +133,18 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_photo_request(update, context, phone)
     else:
         context.user_data['phone'] = phone
-        context.user_data['bonuses'] = 300
+    
+        # Начисляем 300 бонусов при регистрации (суммируем, если уже были)
+        if 'bonuses' not in context.bot_data:
+            context.bot_data['bonuses'] = {}
+        
+        bonuses_dict = context.bot_data['bonuses']
+        uid = update.effective_user.id
+        current = bonuses_dict.get(uid, 0)          # берём текущее значение (или 0)
+        bonuses_dict[uid] = current + 300           # добавляем 300
+    
         await update.message.reply_text("🎉 Регистрация успешна! Вам начислено 300 бонусов.")
         await send_main_menu(update, context)
-
 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'phone' not in context.user_data:
