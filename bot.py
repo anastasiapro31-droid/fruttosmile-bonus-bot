@@ -202,7 +202,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg == "📊 Информация о бонусах":
-        bonuses = context.user_data.get('bonuses', 0)
+        bonuses_dict = context.bot_data.get('bonuses', {})
+        uid = update.effective_user.id
+        bonuses = bonuses_dict.get(uid, 0)
+    
         if 'phone' not in context.user_data:
             await update.message.reply_text("Сначала зарегистрируйтесь!")
         else:
@@ -281,22 +284,29 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Статус обновлён")
 
     # Логика обработки кнопок отзыва — ВЫНЕСЕНА НА УРОВЕНЬ ВЫШЕ
-    elif data.startswith("rev_"):
+        elif data.startswith("rev_"):
         parts = data.split("_")
         if len(parts) < 3:
             await query.answer("Ошибка в данных отзыва", show_alert=True)
             return
-
+    
         action = parts[1]  # app или rej
         client_id = int(parts[2])
-
+    
         if action == "app":
-            # Начисляем бонусы пользователю
-            user_data = context.application.user_data.get(client_id, {})
-            current_bonuses = user_data.get('bonuses', 0)
-            user_data['bonuses'] = current_bonuses + 250
-            context.application.user_data[client_id] = user_data
-
+            # Получаем user_data конкретного пользователя (по chat_id)
+            # context.application.user_data → НЕ используем!
+            # Вместо этого используем context.bot.get_chat(client_id) или просто словарь
+            # Но самый простой способ — хранить в application.bot_data (общий словарь)
+    
+            # Лучше всего: храним бонусы в bot_data как словарь {user_id: bonuses}
+            if 'bonuses' not in context.bot_data:
+                context.bot_data['bonuses'] = {}
+    
+            bonuses_dict = context.bot_data['bonuses']
+            current = bonuses_dict.get(client_id, 0)
+            bonuses_dict[client_id] = current + 250
+    
             await context.bot.send_message(
                 chat_id=client_id,
                 text="🎉 Ваш отзыв проверен! Вам начислено 250 бонусов."
@@ -305,14 +315,14 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250 бонусов."
             )
 
-        elif action == "rej":
-            await context.bot.send_message(
-                chat_id=client_id,
-                text="❌ Ваш отзыв не прошел модерацию."
-            )
-            await query.edit_message_caption(
-                caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО."
-            )
+    elif action == "rej":
+        await context.bot.send_message(
+            chat_id=client_id,
+            text="❌ Ваш отзыв не прошел модерацию."
+        )
+        await query.edit_message_caption(
+            caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО."
+        )
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
