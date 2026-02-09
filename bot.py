@@ -280,32 +280,46 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=uid, text=txt)
             await query.answer("Статус обновлён")
 
-        # Логика обработки кнопок отзыва (ДОБАВИТЬ ЭТО)
-        elif data.startswith("rev_"):
-            parts = data.split("_")
-            action = parts[1] # app (принять) или rej (отказ)
-            client_id = int(parts[2])
-    
-            if action == "app":
-                # Начисляем бонусы пользователю
-                user_data = context.application.user_data.get(client_id, {})
-                current_bonuses = user_data.get('bonuses', 0)
-                user_data['bonuses'] = current_bonuses + 250
-                context.application.user_data[client_id] = user_data
-    
-                await context.bot.send_message(client_id, "🎉 Ваш отзыв проверен! Вам начислено 250 бонусов.")
-                await query.edit_message_caption(caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250 бонусов.")
-            
-            elif action == "rej":
-                await context.bot.send_message(client_id, "❌ Ваш отзыв не прошел модерацию.")
-                await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
+    # Логика обработки кнопок отзыва — ВЫНЕСЕНА НА УРОВЕНЬ ВЫШЕ
+    elif data.startswith("rev_"):
+        parts = data.split("_")
+        if len(parts) < 3:
+            await query.answer("Ошибка в данных отзыва", show_alert=True)
+            return
+
+        action = parts[1]  # app или rej
+        client_id = int(parts[2])
+
+        if action == "app":
+            # Начисляем бонусы пользователю
+            user_data = context.application.user_data.get(client_id, {})
+            current_bonuses = user_data.get('bonuses', 0)
+            user_data['bonuses'] = current_bonuses + 250
+            context.application.user_data[client_id] = user_data
+
+            await context.bot.send_message(
+                chat_id=client_id,
+                text="🎉 Ваш отзыв проверен! Вам начислено 250 бонусов."
+            )
+            await query.edit_message_caption(
+                caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250 бонусов."
+            )
+
+        elif action == "rej":
+            await context.bot.send_message(
+                chat_id=client_id,
+                text="❌ Ваш отзыв не прошел модерацию."
+            )
+            await query.edit_message_caption(
+                caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО."
+            )
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = message.from_user.id
 
-    # Фото от администратора
+    # Фото от администратора — отправка фото заказа клиенту
     if user_id == ADMIN_ID and message.photo:
         target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
 
@@ -332,31 +346,30 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-        # ОБРАБОТКА СКРИНШОТОВ (Кнопки для админа)
-        if context.user_data.get('state') == 'WAIT_REVIEW':
-            phone = context.user_data.get('phone', 'Не указан')
-            name = update.message.from_user.full_name
-            client_id = update.effective_user.id
-     
-            await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов. 💛")
-     
-            # Добавляем кнопки
-            admin_kb = InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_app_{client_id}"),
-                    InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_rej_{client_id}")
-                ]
-            ])
-     
-            await context.bot.send_photo(
-                chat_id=ADMIN_ID,
-                photo=update.message.photo[-1].file_id,
-                caption=f"📸 <b>НОВЫЙ ОТЗЫВ!</b>\n👤 {name}\n📱 {phone}\n🆔 ID: {client_id}",
-                parse_mode="HTML",
-                reply_markup=admin_kb
-            )
-            context.user_data['state'] = None
+    # Обработка скриншотов отзывов (от клиента)
+    if context.user_data.get('state') == 'WAIT_REVIEW':
+        phone = context.user_data.get('phone', 'Не указан')
+        name = update.message.from_user.full_name
+        client_id = update.effective_user.id
 
+        await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов. 💛")
+
+        # Добавляем кнопки для админа
+        admin_kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_app_{client_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_rej_{client_id}")
+            ]
+        ])
+
+        await context.bot.send_photo(
+            chat_id=ADMIN_ID,
+            photo=update.message.photo[-1].file_id,
+            caption=f"📸 <b>НОВЫЙ ОТЗЫВ!</b>\n👤 {name}\n📱 {phone}\n🆔 ID: {client_id}",
+            parse_mode="HTML",
+            reply_markup=admin_kb
+        )
+        context.user_data['state'] = None
 
 
 def main():
