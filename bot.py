@@ -261,16 +261,15 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) < 3:
             await query.answer("Ошибка в данных", show_alert=True)
             return
-
+    
         uid = int(parts[2])
-
+    
         if "ready" in data:
             txt = "✅ Заказ готов! Фото придёт скоро."
             await context.bot.send_message(chat_id=uid, text=txt)
-
-            # Запоминаем клиента, для которого ждём фото
+    
             ADMIN_LAST_REQUEST[ADMIN_ID] = uid
-
+    
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
@@ -279,13 +278,14 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
                 parse_mode="Markdown"
             )
+    
             await query.answer("Ожидаю фото от вас ✅")
-
+    
         elif "work" in data:
             txt = "⏳ Заказ в работе!"
             await context.bot.send_message(chat_id=uid, text=txt)
             await query.answer("Статус обновлён")
-
+    
         else:
             txt = "❌ Заказ не найден."
             await context.bot.send_message(chat_id=uid, text=txt)
