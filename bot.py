@@ -1,9 +1,9 @@
-
 import sys
 import os
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import requests  # добавлено для RetailCRM
 
 from telegram import (
     Update,
@@ -25,11 +25,19 @@ from telegram.ext import (
 # КОНФИГУРАЦИЯ
 # ────────────────────────────────────────────────
 
-BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← обязательно заменить!
+BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← замени на реальный токен
+
 ADMIN_ID = 1165444045             # ← ID менеджера
-# храним соответствие: сообщение менеджеру → клиент
 ADMIN_LAST_REQUEST = {}
 
+# RetailCRM настройки (замени на свои)
+RETAILCRM_URL = "https://xtv17101986.retailcrm.ru"  # например https://fruttosmile.retailcrm.ru
+RETAILCRM_API_KEY = "6ipmvADZaxUSe3usdKOauTFZjjGMOlf7"   # из RetailCRM → Интеграции → API-ключи
+
+RETAILCRM_HEADERS = {
+    "X-API-KEY": RETAILCRM_API_KEY,
+    "Content-Type": "application/json"
+}
 
 # Health check сервер для Render
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -82,14 +90,12 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "Выберите действие в меню FruttoSmile: 🍓"
     await update.effective_message.reply_text(msg, reply_markup=kb)
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = KeyboardButton("📲 Регистрация и +300 бонусов", request_contact=True)
     await update.message.reply_text(
         "🍓 Добро пожаловать!\n\nДля активации бонусов нажмите кнопку ниже 👇",
         reply_markup=ReplyKeyboardMarkup([[btn]], resize_keyboard=True, one_time_keyboard=True)
     )
-
 
 async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
     uid = update.effective_user.id
@@ -124,7 +130,6 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=admin_kb
     )
 
-
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
     state = context.user_data.get('state')
@@ -133,17 +138,51 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_photo_request(update, context, phone)
     else:
         context.user_data['phone'] = phone
-    
-        # Начисляем 300 бонусов при регистрации (суммируем, если уже были)
-        if 'bonuses' not in context.bot_data:
-            context.bot_data['bonuses'] = {}
-        
-        bonuses_dict = context.bot_data['bonuses']
         uid = update.effective_user.id
-        current = bonuses_dict.get(uid, 0)          # берём текущее значение (или 0)
-        bonuses_dict[uid] = current + 300           # добавляем 300
-    
-        await update.message.reply_text("🎉 Регистрация успешна! Вам начислено 300 бонусов.")
+        name = update.effective_user.full_name or "Клиент"
+
+        # RetailCRM: создание или обновление клиента без дублей
+        try:
+            # Поиск клиента по телефону
+            search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={phone}"
+            search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
+            search_response.raise_for_status()
+            customers = search_response.json().get('customers', [])
+
+            if customers:
+                # Клиент существует — обновляем (если нужно)
+                customer_id = customers[0]['id']
+                update_url = f"{RETAILCRM_URL}/api/v5/customers/{customer_id}/edit"
+                requests.put(update_url, headers=RETAILCRM_HEADERS, json={
+                    "firstName": name.split()[0] if ' ' in name else name,
+                    "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
+                    "customFields": {"telegram_id": str(uid)}
+                })
+            else:
+                # Новый клиент — создаём
+                create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
+                create_response = requests.post(create_url, headers=RETAILCRM_HEADERS, json={
+                    "firstName": name.split()[0] if ' ' in name else name,
+                    "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
+                    "phones": [{"number": phone}],
+                    "customFields": {"telegram_id": str(uid)}
+                })
+                create_response.raise_for_status()
+
+            # Начисляем 300 бонусов при регистрации (суммируем, если уже были)
+            if 'bonuses' not in context.bot_data:
+                context.bot_data['bonuses'] = {}
+            
+            bonuses_dict = context.bot_data['bonuses']
+            current = bonuses_dict.get(uid, 0)
+            bonuses_dict[uid] = current + 300
+
+            await update.message.reply_text("🎉 Регистрация успешна! Вы добавлены в систему. Начислено 300 бонусов.")
+        
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка регистрации в системе: {str(e)}")
+            print(f"RetailCRM error: {e}")
+
         await send_main_menu(update, context)
 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,7 +206,6 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
-
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
@@ -227,7 +265,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Перейдите на сайт для оформления заказа 🍓", reply_markup=kb)
         return
 
-
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -243,7 +280,6 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await process_photo_request(update, context, phone)
 
-        # Запоминаем, что ждём фото для этого клиента
         ADMIN_LAST_REQUEST[ADMIN_ID] = uid
 
         await query.message.reply_text(
@@ -261,15 +297,15 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) < 3:
             await query.answer("Ошибка в данных", show_alert=True)
             return
-    
+
         uid = int(parts[2])
-    
+
         if "ready" in data:
             txt = "✅ Заказ готов! Фото придёт скоро."
             await context.bot.send_message(chat_id=uid, text=txt)
-    
+
             ADMIN_LAST_REQUEST[ADMIN_ID] = uid
-    
+
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=(
@@ -278,14 +314,13 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ),
                 parse_mode="Markdown"
             )
-    
             await query.answer("Ожидаю фото от вас ✅")
-    
+
         elif "work" in data:
             txt = "⏳ Заказ в работе!"
             await context.bot.send_message(chat_id=uid, text=txt)
             await query.answer("Статус обновлён")
-    
+
         else:
             txt = "❌ Заказ не найден."
             await context.bot.send_message(chat_id=uid, text=txt)
@@ -301,7 +336,6 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         client_id = int(parts[2])
 
         if action == "app":
-            # начисление 250 бонусов
             if 'bonuses' not in context.bot_data:
                 context.bot_data['bonuses'] = {}
             bonuses_dict = context.bot_data['bonuses']
@@ -315,12 +349,10 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(client_id, "❌ Ваш отзыв не прошел модерацию.")
             await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
 
-
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = message.from_user.id
 
-    # Фото от администратора — отправка фото заказа клиенту
     if user_id == ADMIN_ID and message.photo:
         target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
 
@@ -339,7 +371,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Фото успешно отправлено клиенту (ID: {target_id})"
             )
 
-            # Очищаем — больше не ждём фото для этого клиента
             del ADMIN_LAST_REQUEST[ADMIN_ID]
 
         except Exception as e:
@@ -347,7 +378,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # Обработка скриншотов отзывов (от клиента)
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
@@ -355,7 +385,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов. 💛")
 
-        # Добавляем кнопки для админа
         admin_kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_app_{client_id}"),
@@ -372,7 +401,6 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['state'] = None
 
-
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
 
@@ -385,7 +413,6 @@ def main():
     app.add_handler(CallbackQueryHandler(query_handler))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
