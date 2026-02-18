@@ -65,6 +65,33 @@ try:
 except Exception as e:
     print(f"Ошибка подключения Google Sheets: {e}")
 
+# НОРМАЛИЗАЦИЯ ТЕЛЕФОНА
+def normalize_phone(phone: str) -> str:
+    phone = re.sub(r'[^0-9+]', '', phone)
+
+    # если начинается с +7 -> оставляем
+    if phone.startswith("+7") and len(phone) == 12:
+        return phone
+
+    # если начинается с 8 -> меняем на +7
+    if phone.startswith("8") and len(phone) == 11:
+        return "+7" + phone[1:]
+
+    # если начинается с 7 -> добавляем +
+    if phone.startswith("7") and len(phone) == 11:
+        return "+7" + phone[1:]
+
+    return phone
+
+# ВАРИАНТЫ НОМЕРА ДЛЯ ПОИСКА (все 3 формата)
+def get_phone_variants(phone: str) -> list:
+    norm = normalize_phone(phone)
+    variants = [norm]
+    if norm.startswith("+7") and len(norm) == 12:
+        variants.append("8" + norm[2:])
+        variants.append("7" + norm[2:])
+    return variants
+
 # Health check
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -159,11 +186,12 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
     ADMIN_LAST_REQUEST[ADMIN_ID] = uid
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    phone = update.message.contact.phone_number
+    phone = normalize_phone(update.message.contact.phone_number)
+
     state = context.user_data.get('state')
 
     if state == 'WAIT_ORDER':
-        context.user_data['phone'] = phone  # ← ИСПРАВЛЕНИЕ: сохраняем телефон
+        context.user_data['phone'] = phone
         await process_photo_request(update, context, phone)
         return
 
@@ -171,40 +199,45 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     name = update.effective_user.full_name or "Клиент"
 
-    # RetailCRM
+    # RetailCRM — поиск по всем вариантам номера
     try:
-        search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={phone}"
-        search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
-        search_response.raise_for_status()
-        customers = search_response.json().get('customers', [])
+        variants = get_phone_variants(phone)
+        customers = []
 
-        if customers:
-            customer_id = customers[0]['id']
-            update_url = f"{RETAILCRM_URL}/api/v5/customers/{customer_id}/edit"
-            requests.put(update_url, headers=RETAILCRM_HEADERS, json={
-                "firstName": name.split()[0] if ' ' in name else name,
-                "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
-                "customFields": {"telegram_id": str(uid)}
-            })
-        else:
+        for variant in variants:
+            search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={variant}"
+            search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
+            search_response.raise_for_status()
+            found = search_response.json().get("customers", [])
+            if found:
+                customers = found
+                break
+
+        if not customers:
             create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
             requests.post(create_url, headers=RETAILCRM_HEADERS, json={
-                "firstName": name.split()[0] if ' ' in name else name,
-                "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
-                "phones": [{"number": phone}],
-                "customFields": {"telegram_id": str(uid)}
+                "firstName": name,
+                "phones": [{"number": phone}]
             })
+            print("RetailCRM: клиент создан")
+        else:
+            print("RetailCRM: клиент уже существует — ничего не меняем")
     except Exception as e:
         print(f"RetailCRM error: {e}")
 
-    # Google Sheets — +300 только если клиента ещё нет
+    # Google Sheets — поиск по всем вариантам
     if users_sheet:
         try:
+            variants = get_phone_variants(phone)
             cell = None
-            try:
-                cell = users_sheet.find(phone, in_column=4)
-            except:
-                cell = None
+
+            for variant in variants:
+                try:
+                    cell = users_sheet.find(variant, in_column=4)
+                    if cell:
+                        break
+                except:
+                    pass
 
             if cell:
                 await update.message.reply_text("Вы уже зарегистрированы!")
@@ -319,8 +352,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Сначала зарегистрируйтесь!")
             return
 
+        phone = normalize_phone(phone)
+
         try:
-            cell = users_sheet.find(phone, in_column=4)
+            cell = None
+            variants = get_phone_variants(phone)
+            for variant in variants:
+                try:
+                    cell = users_sheet.find(variant, in_column=4)
+                    if cell:
+                        break
+                except:
+                    pass
+
             if cell:
                 balance = int(users_sheet.cell(cell.row, 5).value or 0)
                 await update.message.reply_text(f"🎁 Ваш баланс: {balance} бонусов.")
@@ -410,11 +454,7 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("Сначала зарегистрируйтесь.")
             return
 
-        # Вызываем функцию отправки запроса админу
         await process_photo_request(update, context, phone)
-
-        # Сообщение клиенту уже отправлено внутри process_photo_request
-        # Дополнительное сообщение НЕ добавляем, чтобы не дублировать
 
         context.user_data.pop('state', None)
         return
@@ -496,7 +536,8 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")]
+        [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
     ])
 
     await update.message.reply_text("🛠 Админ-панель", reply_markup=kb)
@@ -517,15 +558,26 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=ReplyKeyboardRemove()
         )
 
+    elif data == "admin_back":
+        ADMIN_STATES.pop(uid, None)
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+        ])
+        await query.message.reply_text("🛠 Админ-панель", reply_markup=kb)
+        return
+
     elif data.startswith("admin_add_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
+        phone = normalize_phone(phone)  # ← ИСПРАВЛЕНО: нормализация
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_ADD_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для добавления клиенту {phone}:")
 
     elif data.startswith("admin_sub_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
+        phone = normalize_phone(phone)  # ← ИСПРАВЛЕНО: нормализация
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_SUB_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для списания у клиента {phone}:")
 
@@ -538,9 +590,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     state = ADMIN_STATES.get(uid)
 
     if state == "ADMIN_WAIT_PHONE":
-        phone = re.sub(r'[^0-9+]', '', text)
-        if not phone.startswith("+"):
-            phone = "+" + phone
+        phone = normalize_phone(text)
 
         if not users_sheet:
             await update.message.reply_text("База недоступна.")
@@ -548,7 +598,16 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         try:
-            cell = users_sheet.find(phone, in_column=4)
+            cell = None
+            variants = get_phone_variants(phone)
+            for variant in variants:
+                try:
+                    cell = users_sheet.find(variant, in_column=4)
+                    if cell:
+                        break
+                except:
+                    pass
+
             if cell:
                 row = cell.row
                 name = users_sheet.cell(row, 3).value or "Не указано"
@@ -557,7 +616,9 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 safe_phone = phone.replace("+", "")
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("➕ Добавить", callback_data=f"admin_add_{safe_phone}")],
-                    [InlineKeyboardButton("➖ Списать", callback_data=f"admin_sub_{safe_phone}")]
+                    [InlineKeyboardButton("➖ Списать", callback_data=f"admin_sub_{safe_phone}")],
+                    [InlineKeyboardButton("🔍 Найти другого клиента", callback_data="admin_find_client")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
 
                 await update.message.reply_text(
@@ -565,7 +626,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     reply_markup=kb
                 )
             else:
-                await update.message.reply_text(f"Клиент с номером {phone} не найден.")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 Найти другого клиента", callback_data="admin_find_client")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+                ])
+                await update.message.reply_text(f"❌ Клиент с номером {phone} не найден.", reply_markup=kb)
+
         except Exception as e:
             await update.message.reply_text(f"Ошибка поиска: {str(e)}")
 
@@ -580,13 +646,23 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         safe_phone = state.split("_")[-1]
         phone = "+" + safe_phone
+        phone = normalize_phone(phone)
 
         try:
             amount = int(text)
             if amount <= 0:
                 raise ValueError
 
-            cell = users_sheet.find(phone, in_column=4)
+            cell = None
+            variants = get_phone_variants(phone)
+            for variant in variants:
+                try:
+                    cell = users_sheet.find(variant, in_column=4)
+                    if cell:
+                        break
+                except:
+                    pass
+
             if cell:
                 row = cell.row
                 current = int(users_sheet.cell(row, 5).value or 0)
@@ -604,7 +680,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "Добавлено админом"
                     ], value_input_option="RAW")
 
-                await update.message.reply_text(f"Добавлено {amount} бонусов. Новый баланс: {new_balance}")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+                ])
+
+                await update.message.reply_text(f"Добавлено {amount} бонусов. Новый баланс: {new_balance}", reply_markup=kb)
             else:
                 await update.message.reply_text("Клиент не найден.")
         except:
@@ -621,13 +702,23 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         safe_phone = state.split("_")[-1]
         phone = "+" + safe_phone
+        phone = normalize_phone(phone)
 
         try:
             amount = int(text)
             if amount <= 0:
                 raise ValueError
 
-            cell = users_sheet.find(phone, in_column=4)
+            cell = None
+            variants = get_phone_variants(phone)
+            for variant in variants:
+                try:
+                    cell = users_sheet.find(variant, in_column=4)
+                    if cell:
+                        break
+                except:
+                    pass
+
             if cell:
                 row = cell.row
                 current = int(users_sheet.cell(row, 5).value or 0)
@@ -645,7 +736,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "Списано админом"
                     ], value_input_option="RAW")
 
-                await update.message.reply_text(f"Списано {amount} бонусов. Новый баланс: {new_balance}")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+                    [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
+                ])
+
+                await update.message.reply_text(f"Списано {amount} бонусов. Новый баланс: {new_balance}", reply_markup=kb)
             else:
                 await update.message.reply_text("Клиент не найден.")
         except:
@@ -664,7 +760,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[0-9+\-\s]{5,30}$'), admin_text_handler))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[0-9+\-\s]{1,30}$'), admin_text_handler))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
