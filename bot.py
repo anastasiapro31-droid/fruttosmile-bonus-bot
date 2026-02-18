@@ -3,7 +3,11 @@ import os
 import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import requests  # добавлено для RetailCRM
+import requests
+from datetime import datetime
+
+import gspread
+from google.oauth2.service_account import Credentials
 
 from telegram import (
     Update,
@@ -11,6 +15,7 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -22,24 +27,45 @@ from telegram.ext import (
 )
 
 # ────────────────────────────────────────────────
-# КОНФИГУРАЦИЯ
+# КОНФИГУРАЦИЯ — меняй только здесь
 # ────────────────────────────────────────────────
 
-BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← замени на реальный токен
+BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ!
 
-ADMIN_ID = 1165444045             # ← ID менеджера
+ADMIN_ID = 1165444045
 ADMIN_LAST_REQUEST = {}
+ADMIN_STATES = {}  # {user_id: state}
 
-# RetailCRM настройки (замени на свои)
-RETAILCRM_URL = "https://xtv17101986.retailcrm.ru"  # например https://fruttosmile.retailcrm.ru
-RETAILCRM_API_KEY = "6ipmvADZaxUSe3usdKOauTFZjjGMOlf7"   # из RetailCRM → Интеграции → API-ключи
-
+RETAILCRM_URL = "https://xtv17101986.retailcrm.ru"     # ← замени или удали блоки ниже
+RETAILCRM_API_KEY = "6ipmvADZaxUSe3usdKOauTFZjjGMOlf7"               # ← замени или удали
 RETAILCRM_HEADERS = {
     "X-API-KEY": RETAILCRM_API_KEY,
     "Content-Type": "application/json"
 }
 
-# Health check сервер для Render
+SHEET_NAME = "Fruttosmile Bonus CRM"
+
+SCOPE = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+
+CREDS_FILE = "credentials.json"
+
+users_sheet = None
+logs_sheet = None
+
+try:
+    creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open(SHEET_NAME)
+    users_sheet = spreadsheet.worksheet("users")
+    logs_sheet = spreadsheet.worksheet("logs")
+    print("Google Sheets подключена успешно")
+except Exception as e:
+    print(f"Ошибка подключения Google Sheets: {e}")
+
+# Health check
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -51,7 +77,7 @@ def run_health_server():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# ================= ВЫБРАННЫЙ КАТАЛОГ ТОВАРОВ =================
+# КАТАЛОГ ТОВАРОВ
 PRODUCTS = {
     "boxes": [
         {"name": "Бенто-торт из клубники (8 ягод)", "price": "2490", "photo": "http://fruttosmile.su/wp-content/uploads/2025/07/photoeditorsdk-export4.png"},
@@ -130,60 +156,87 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=admin_kb
     )
 
+    ADMIN_LAST_REQUEST[ADMIN_ID] = uid
+
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = update.message.contact.phone_number
     state = context.user_data.get('state')
 
     if state == 'WAIT_ORDER':
+        context.user_data['phone'] = phone  # ← ИСПРАВЛЕНИЕ: сохраняем телефон
         await process_photo_request(update, context, phone)
-    else:
-        context.user_data['phone'] = phone
-        uid = update.effective_user.id
-        name = update.effective_user.full_name or "Клиент"
+        return
 
-        # RetailCRM: создание или обновление клиента без дублей
+    context.user_data['phone'] = phone
+    uid = update.effective_user.id
+    name = update.effective_user.full_name or "Клиент"
+
+    # RetailCRM
+    try:
+        search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={phone}"
+        search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
+        search_response.raise_for_status()
+        customers = search_response.json().get('customers', [])
+
+        if customers:
+            customer_id = customers[0]['id']
+            update_url = f"{RETAILCRM_URL}/api/v5/customers/{customer_id}/edit"
+            requests.put(update_url, headers=RETAILCRM_HEADERS, json={
+                "firstName": name.split()[0] if ' ' in name else name,
+                "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
+                "customFields": {"telegram_id": str(uid)}
+            })
+        else:
+            create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
+            requests.post(create_url, headers=RETAILCRM_HEADERS, json={
+                "firstName": name.split()[0] if ' ' in name else name,
+                "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
+                "phones": [{"number": phone}],
+                "customFields": {"telegram_id": str(uid)}
+            })
+    except Exception as e:
+        print(f"RetailCRM error: {e}")
+
+    # Google Sheets — +300 только если клиента ещё нет
+    if users_sheet:
         try:
-            # Поиск клиента по телефону
-            search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={phone}"
-            search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
-            search_response.raise_for_status()
-            customers = search_response.json().get('customers', [])
+            cell = None
+            try:
+                cell = users_sheet.find(phone, in_column=4)
+            except:
+                cell = None
 
-            if customers:
-                # Клиент существует — обновляем (если нужно)
-                customer_id = customers[0]['id']
-                update_url = f"{RETAILCRM_URL}/api/v5/customers/{customer_id}/edit"
-                requests.put(update_url, headers=RETAILCRM_HEADERS, json={
-                    "firstName": name.split()[0] if ' ' in name else name,
-                    "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
-                    "customFields": {"telegram_id": str(uid)}
-                })
+            if cell:
+                await update.message.reply_text("Вы уже зарегистрированы!")
             else:
-                # Новый клиент — создаём
-                create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
-                create_response = requests.post(create_url, headers=RETAILCRM_HEADERS, json={
-                    "firstName": name.split()[0] if ' ' in name else name,
-                    "lastName": ' '.join(name.split()[1:]) if ' ' in name else "",
-                    "phones": [{"number": phone}],
-                    "customFields": {"telegram_id": str(uid)}
-                })
-                create_response.raise_for_status()
+                new_row = [
+                    uid,
+                    update.effective_user.username or "",
+                    name,
+                    phone,
+                    300,
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "False"
+                ]
+                users_sheet.append_row(new_row, value_input_option="RAW")
 
-            # Начисляем 300 бонусов при регистрации (суммируем, если уже были)
-            if 'bonuses' not in context.bot_data:
-                context.bot_data['bonuses'] = {}
-            
-            bonuses_dict = context.bot_data['bonuses']
-            current = bonuses_dict.get(uid, 0)
-            bonuses_dict[uid] = current + 300
+                if logs_sheet:
+                    logs_sheet.append_row([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        uid,
+                        "registration",
+                        phone,
+                        300,
+                        "Регистрация через бот"
+                    ], value_input_option="RAW")
 
-            await update.message.reply_text("🎉 Регистрация успешна! Вы добавлены в систему. Начислено 300 бонусов.")
-        
+                await update.message.reply_text("🎉 Регистрация успешна! Начислено 300 бонусов.")
         except Exception as e:
-            await update.message.reply_text(f"Ошибка регистрации в системе: {str(e)}")
-            print(f"RetailCRM error: {e}")
+            print(f"Google Sheets error: {e}")
+            await update.message.reply_text("Ошибка регистрации в базе.")
 
-        await send_main_menu(update, context)
+    await send_main_menu(update, context)
 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'phone' not in context.user_data:
@@ -227,127 +280,57 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💐 Цветы", callback_data="cat_flowers")],
             [InlineKeyboardButton("🍖 Мужские букеты", callback_data="cat_meat")]
         ]
-        await update.message.reply_text("Выберите категорию для просмотра нашего ассортимента:", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
         return
 
     if msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
         kb = [
-            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/?ll=104.353133%2C52.259946&z=14"), InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/104.353179%2C52.259892")],
-            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865"), InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]
+            [InlineKeyboardButton("Яндекс", url="https://yandex.ru/maps/org/fruttosmile/58246506027/?ll=104.353133%2C52.259946&z=14")],
+            [InlineKeyboardButton("2ГИС", url="https://2gis.ru/irkutsk/firm/1548641653278292/104.353179%2C52.259892")],
+            [InlineKeyboardButton("Avito", url="https://www.avito.ru/brands/i190027211?ysclid=ml5c5ji39d797258865")],
+            [InlineKeyboardButton("VK", url="https://vk.com/fruttosmile?ysclid=ml5b4zi1us569177487")]
         ]
         await update.message.reply_text(
-            "⭐ Оставьте отзыв о Fruttosmile на любой площадке и пришлите скриншот сюда.\n\n"
-            "После модерации мы начислим вам 250 бонусов! 📸",
+            "⭐ Оставьте отзыв на любой площадке и пришлите скриншот сюда.\n\nПосле модерации +250 бонусов!",
             reply_markup=InlineKeyboardMarkup(kb)
         )
         return
 
     if msg == "📍 Адреса самовывоза":
-        await update.message.reply_text("📍 Мы ждем вас по адресу: [Иркутск, Улица Дыбовского, 8/5]\n⏰ Работаем каждый день с 09:00 до 20:00")
-        return
-
-    if msg == "📊 Информация о бонусах":
-        bonuses_dict = context.bot_data.get('bonuses', {})
-        uid = update.effective_user.id
-        bonuses = bonuses_dict.get(uid, 0)
-    
-        if 'phone' not in context.user_data:
-            await update.message.reply_text("Сначала зарегистрируйтесь!")
-        else:
-            await update.message.reply_text(f"🎁 Ваш баланс: {bonuses} бонусов.")
+        await update.message.reply_text("📍 Иркутск, Улица Дыбовского, 8/5\n⏰ 09:00-20:00")
         return
 
     if msg == "🛒 Оформить заказ":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Оформить на сайте", url="https://fruttosmile.ru/")]
+            [InlineKeyboardButton("Оформить на сайте", url="https://fruttosmile.ru/")],
+            [InlineKeyboardButton("Связаться с магазином", url="https://t.me/fruttosmile_bot")]
         ])
-        await update.message.reply_text("Перейдите на сайт для оформления заказа 🍓", reply_markup=kb)
+        await update.message.reply_text("Заказать через сайт или связь:", reply_markup=kb)
         return
 
-async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+    if msg == "📊 Информация о бонусах":
+        if not users_sheet:
+            await update.message.reply_text("База недоступна.")
+            return
 
-    if data == "confirm_photo_request":
         phone = context.user_data.get('phone')
-        uid = update.effective_user.id
-        
         if not phone:
-            await query.message.reply_text("Сначала зарегистрируйтесь (поделитесь номером).")
+            await update.message.reply_text("Сначала зарегистрируйтесь!")
             return
 
-        await process_photo_request(update, context, phone)
+        try:
+            cell = users_sheet.find(phone, in_column=4)
+            if cell:
+                balance = int(users_sheet.cell(cell.row, 5).value or 0)
+                await update.message.reply_text(f"🎁 Ваш баланс: {balance} бонусов.")
+            else:
+                await update.message.reply_text("Номер не найден.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {str(e)}")
+        return
 
-        ADMIN_LAST_REQUEST[ADMIN_ID] = uid
-
-        await query.message.reply_text(
-            "✅ Запрос отправлен.\nМенеджер пришлёт фото, как только заказ будет готов."
-        )
-        context.user_data.pop('state', None)
-
-    elif data == "cancel_photo_request":
-        await query.edit_message_text("Запрос отменён.")
-        context.user_data.pop('state', None)
-        await send_main_menu(update, context)
-
-    elif data.startswith("st_"):
-        parts = data.split("_")
-        if len(parts) < 3:
-            await query.answer("Ошибка в данных", show_alert=True)
-            return
-
-        uid = int(parts[2])
-
-        if "ready" in data:
-            txt = "✅ Заказ готов! Фото придёт скоро."
-            await context.bot.send_message(chat_id=uid, text=txt)
-
-            ADMIN_LAST_REQUEST[ADMIN_ID] = uid
-
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "📸 **Отправьте фото заказа** (просто прикрепите фото в этот чат)\n"
-                    f"Оно будет автоматически отправлено клиенту (ID: {uid})"
-                ),
-                parse_mode="Markdown"
-            )
-            await query.answer("Ожидаю фото от вас ✅")
-
-        elif "work" in data:
-            txt = "⏳ Заказ в работе!"
-            await context.bot.send_message(chat_id=uid, text=txt)
-            await query.answer("Статус обновлён")
-
-        else:
-            txt = "❌ Заказ не найден."
-            await context.bot.send_message(chat_id=uid, text=txt)
-            await query.answer("Статус обновлён")
-
-    elif data.startswith("rev_"):
-        parts = data.split("_")
-        if len(parts) < 3:
-            await query.answer("Ошибка в данных отзыва", show_alert=True)
-            return
-
-        action = parts[1]
-        client_id = int(parts[2])
-
-        if action == "app":
-            if 'bonuses' not in context.bot_data:
-                context.bot_data['bonuses'] = {}
-            bonuses_dict = context.bot_data['bonuses']
-            current = bonuses_dict.get(client_id, 0)
-            bonuses_dict[client_id] = current + 250
-
-            await context.bot.send_message(client_id, "🎉 Ваш отзыв проверен! Вам начислено 250 бонусов.")
-            await query.edit_message_caption(caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250 бонусов.")
-
-        elif action == "rej":
-            await context.bot.send_message(client_id, "❌ Ваш отзыв не прошел модерацию.")
-            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
+    await update.message.reply_text("Неизвестная команда.")
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -355,27 +338,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_id == ADMIN_ID and message.photo:
         target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
-
         if not target_id:
-            await message.reply_text("❌ Сейчас нет активного запроса на отправку фото.")
+            await message.reply_text("❌ Нет активного запроса на фото.")
             return
 
-        try:
-            await context.bot.send_photo(
-                chat_id=target_id,
-                photo=message.photo[-1].file_id,
-                caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
-            )
-
-            await message.reply_text(
-                f"✅ Фото успешно отправлено клиенту (ID: {target_id})"
-            )
-
-            del ADMIN_LAST_REQUEST[ADMIN_ID]
-
-        except Exception as e:
-            await message.reply_text(f"❌ Ошибка при отправке фото: {str(e)}")
-
+        await context.bot.send_photo(
+            chat_id=target_id,
+            photo=message.photo[-1].file_id,
+            caption="📸 Ваш заказ готов! Приятного аппетита! 🍓"
+        )
+        await message.reply_text(f"✅ Фото отправлено клиенту (ID: {target_id})")
+        del ADMIN_LAST_REQUEST[ADMIN_ID]
         return
 
     if context.user_data.get('state') == 'WAIT_REVIEW':
@@ -383,7 +356,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = update.message.from_user.full_name
         client_id = update.effective_user.id
 
-        await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов. 💛")
+        await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов.")
 
         admin_kb = InlineKeyboardMarkup([
             [
@@ -401,15 +374,303 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data['state'] = None
 
+async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("cat_"):
+        category = data.split("_")[1]
+        items = PRODUCTS.get(category, [])
+
+        if not items:
+            await query.message.reply_text("Категория не найдена.")
+            return
+
+        for item in items:
+            caption = f"{item['name']}\nЦена: {item['price']} руб."
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Заказать на сайте", url="https://fruttosmile.ru/")],
+                [InlineKeyboardButton("Связаться с магазином", url="https://t.me/fruttosmile_bot")]
+            ])
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=item['photo'],
+                caption=caption,
+                reply_markup=kb
+            )
+
+        return
+
+    if data == "confirm_photo_request":
+        phone = context.user_data.get('phone')
+        uid = update.effective_user.id
+
+        if not phone:
+            await query.message.reply_text("Сначала зарегистрируйтесь.")
+            return
+
+        # Вызываем функцию отправки запроса админу
+        await process_photo_request(update, context, phone)
+
+        # Сообщение клиенту уже отправлено внутри process_photo_request
+        # Дополнительное сообщение НЕ добавляем, чтобы не дублировать
+
+        context.user_data.pop('state', None)
+        return
+
+    if data == "cancel_photo_request":
+        await query.edit_message_text("Запрос отменён.")
+        context.user_data.pop('state', None)
+        await send_main_menu(update, context)
+        return
+
+    if data.startswith("st_"):
+        parts = data.split("_")
+        if len(parts) < 3:
+            return
+
+        uid = int(parts[2])
+
+        if "ready" in data:
+            await context.bot.send_message(uid, "✅ Заказ готов! Фото скоро придёт.")
+            ADMIN_LAST_REQUEST[ADMIN_ID] = uid
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"📸 Отправьте фото заказа клиенту (ID: {uid})"
+            )
+
+        elif "work" in data:
+            await context.bot.send_message(uid, "⏳ Заказ в работе!")
+
+        else:
+            await context.bot.send_message(uid, "❌ Заказ не найден.")
+
+        return
+
+    if data.startswith("rev_"):
+        parts = data.split("_")
+        if len(parts) < 3:
+            return
+
+        action = parts[1]
+        client_id = int(parts[2])
+
+        if action == "app":
+            if users_sheet:
+                try:
+                    cell = users_sheet.find(str(client_id), in_column=1)
+                    if cell:
+                        row = cell.row
+                        current = int(users_sheet.cell(row, 5).value or 0)
+                        new_balance = current + 250
+                        users_sheet.update_cell(row, 5, new_balance)
+                        users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+                        if logs_sheet:
+                            logs_sheet.append_row([
+                                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                ADMIN_ID,
+                                "review_bonus",
+                                users_sheet.cell(row, 4).value or "Не указан",
+                                250,
+                                "Бонус за отзыв"
+                            ], value_input_option="RAW")
+
+                        await context.bot.send_message(client_id, "🎉 Отзыв проверен! +250 бонусов.")
+                        await query.edit_message_caption(caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250")
+                except Exception as e:
+                    await context.bot.send_message(client_id, f"Ошибка: {str(e)}")
+
+        elif action == "rej":
+            await context.bot.send_message(client_id, "❌ Отзыв отклонён.")
+            await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
+
+# ========================================================
+#  АДМИНКА (только одна версия!)
+# ========================================================
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("Доступ запрещён.")
+        return
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")]
+    ])
+
+    await update.message.reply_text("🛠 Админ-панель", reply_markup=kb)
+
+async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    uid = query.from_user.id
+
+    if uid != ADMIN_ID:
+        return
+
+    if data == "admin_find_client":
+        ADMIN_STATES[uid] = "ADMIN_WAIT_PHONE"
+        await query.message.reply_text(
+            "Введите номер телефона клиента (например +79991234567):",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+    elif data.startswith("admin_add_"):
+        safe_phone = data.split("_")[2]
+        phone = "+" + safe_phone
+        ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_ADD_{safe_phone}"
+        await query.message.reply_text(f"Введите сумму для добавления клиенту {phone}:")
+
+    elif data.startswith("admin_sub_"):
+        safe_phone = data.split("_")[2]
+        phone = "+" + safe_phone
+        ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_SUB_{safe_phone}"
+        await query.message.reply_text(f"Введите сумму для списания у клиента {phone}:")
+
+async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid != ADMIN_ID:
+        return
+
+    text = update.message.text.strip()
+    state = ADMIN_STATES.get(uid)
+
+    if state == "ADMIN_WAIT_PHONE":
+        phone = re.sub(r'[^0-9+]', '', text)
+        if not phone.startswith("+"):
+            phone = "+" + phone
+
+        if not users_sheet:
+            await update.message.reply_text("База недоступна.")
+            ADMIN_STATES.pop(uid, None)
+            return
+
+        try:
+            cell = users_sheet.find(phone, in_column=4)
+            if cell:
+                row = cell.row
+                name = users_sheet.cell(row, 3).value or "Не указано"
+                balance = int(users_sheet.cell(row, 5).value or 0)
+
+                safe_phone = phone.replace("+", "")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ Добавить", callback_data=f"admin_add_{safe_phone}")],
+                    [InlineKeyboardButton("➖ Списать", callback_data=f"admin_sub_{safe_phone}")]
+                ])
+
+                await update.message.reply_text(
+                    f"Клиент найден:\nИмя: {name}\nТелефон: {phone}\nБаланс: {balance} бонусов",
+                    reply_markup=kb
+                )
+            else:
+                await update.message.reply_text(f"Клиент с номером {phone} не найден.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка поиска: {str(e)}")
+
+        ADMIN_STATES.pop(uid, None)
+        return
+
+    if state and state.startswith("ADMIN_WAIT_AMOUNT_ADD_"):
+        if not users_sheet:
+            await update.message.reply_text("База недоступна.")
+            ADMIN_STATES.pop(uid, None)
+            return
+
+        safe_phone = state.split("_")[-1]
+        phone = "+" + safe_phone
+
+        try:
+            amount = int(text)
+            if amount <= 0:
+                raise ValueError
+
+            cell = users_sheet.find(phone, in_column=4)
+            if cell:
+                row = cell.row
+                current = int(users_sheet.cell(row, 5).value or 0)
+                new_balance = current + amount
+                users_sheet.update_cell(row, 5, new_balance)
+                users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+                if logs_sheet:
+                    logs_sheet.append_row([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        ADMIN_ID,
+                        f"admin_add {amount}",
+                        phone,
+                        amount,
+                        "Добавлено админом"
+                    ], value_input_option="RAW")
+
+                await update.message.reply_text(f"Добавлено {amount} бонусов. Новый баланс: {new_balance}")
+            else:
+                await update.message.reply_text("Клиент не найден.")
+        except:
+            await update.message.reply_text("Введите положительное число.")
+
+        ADMIN_STATES.pop(uid, None)
+        return
+
+    if state and state.startswith("ADMIN_WAIT_AMOUNT_SUB_"):
+        if not users_sheet:
+            await update.message.reply_text("База недоступна.")
+            ADMIN_STATES.pop(uid, None)
+            return
+
+        safe_phone = state.split("_")[-1]
+        phone = "+" + safe_phone
+
+        try:
+            amount = int(text)
+            if amount <= 0:
+                raise ValueError
+
+            cell = users_sheet.find(phone, in_column=4)
+            if cell:
+                row = cell.row
+                current = int(users_sheet.cell(row, 5).value or 0)
+                new_balance = max(0, current - amount)
+                users_sheet.update_cell(row, 5, new_balance)
+                users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+                if logs_sheet:
+                    logs_sheet.append_row([
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        ADMIN_ID,
+                        f"admin_sub {amount}",
+                        phone,
+                        -amount,
+                        "Списано админом"
+                    ], value_input_option="RAW")
+
+                await update.message.reply_text(f"Списано {amount} бонусов. Новый баланс: {new_balance}")
+            else:
+                await update.message.reply_text("Клиент не найден.")
+        except:
+            await update.message.reply_text("Введите положительное число.")
+
+        ADMIN_STATES.pop(uid, None)
+        return
+
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_panel))
+
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[0-9+\-\s]{5,30}$'), admin_text_handler))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
     app.add_handler(CallbackQueryHandler(query_handler))
 
     app.run_polling()
