@@ -219,9 +219,13 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not customers:
             create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
             resp = requests.post(create_url, headers=RETAILCRM_HEADERS, json={
-                "firstName": name,
-                "phones": [{"number": phone}]
+                "customer": {
+                    "firstName": name,
+                    "phones": [{"number": phone}]
+                }
             })
+            
+            resp.raise_for_status()
             
             print("RetailCRM CREATE STATUS:", resp.status_code)
             print("RetailCRM CREATE RESPONSE:", resp.text)
