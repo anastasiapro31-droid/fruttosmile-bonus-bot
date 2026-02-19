@@ -5,6 +5,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
 from datetime import datetime
+import asyncio
 
 import gspread
 from google.oauth2.service_account import Credentials
@@ -35,6 +36,7 @@ BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← ОБ
 ADMIN_ID = 1165444045
 ADMIN_LAST_REQUEST = {}
 ADMIN_STATES = {}  # {user_id: state}
+BROADCAST_DATA = {}  # временное хранение рассылки для админа
 
 RETAILCRM_URL = "https://xtv17101986.retailcrm.ru"     # ← замени или удали блоки ниже
 RETAILCRM_API_KEY = "6ipmvADZaxUSe3usdKOauTFZjjGMOlf7"               # ← замени или удали
@@ -354,10 +356,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if msg == "🛒 Оформить заказ":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Оформить на сайте", url="https://fruttosmile.ru/")],
-            [InlineKeyboardButton("Связаться с магазином", url="https://t.me/fruttosmile_bot")]
+            [InlineKeyboardButton("🌐 Заказать на сайте", url="https://fruttosmile.ru/")],
+            [InlineKeyboardButton("🤖 Заказать через бота", url="https://t.me/fruttosmile_bot")],
+            [InlineKeyboardButton("💬 Связаться с магазином", url="https://t.me/@fruttosmile")]
         ])
-        await update.message.reply_text("Заказать через сайт или связь:", reply_markup=kb)
+        await update.message.reply_text("Выберите способ заказа:", reply_markup=kb)
         return
 
     if msg == "📊 Информация о бонусах":
@@ -397,6 +400,26 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = message.from_user.id
+
+    # ====== РАССЫЛКА: админ отправляет фото ======
+    if user_id == ADMIN_ID and context.user_data.get("broadcast_waiting_photo"):
+        file_id = message.photo[-1].file_id
+
+        BROADCAST_DATA[ADMIN_ID]["photo"] = file_id
+        context.user_data["broadcast_waiting_photo"] = False
+        ADMIN_STATES[ADMIN_ID] = "ADMIN_BROADCAST_WAIT_DELAY"
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏱ 1 минута", callback_data="broadcast_delay_60")],
+            [InlineKeyboardButton("⏱ 2 минуты", callback_data="broadcast_delay_120")],
+            [InlineKeyboardButton("⏱ 5 минут", callback_data="broadcast_delay_300")]
+        ])
+
+        await update.message.reply_text(
+            "📷 Фото сохранено!\n\nТеперь выберите интервал отправки:",
+            reply_markup=kb
+        )
+        return
 
     if user_id == ADMIN_ID and message.photo:
         target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
@@ -545,7 +568,7 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
 
 # ========================================================
-#  АДМИНКА (только одна версия!)
+#  АДМИНКА + РАССЫЛКА
 # ========================================================
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -555,6 +578,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+        [InlineKeyboardButton("📢 Сделать рассылку", callback_data="admin_broadcast")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
     ])
 
@@ -580,22 +604,99 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ADMIN_STATES.pop(uid, None)
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
+            [InlineKeyboardButton("📢 Сделать рассылку", callback_data="admin_broadcast")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
         ])
         await query.message.reply_text("🛠 Админ-панель", reply_markup=kb)
         return
 
+    elif data == "admin_broadcast":
+        ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_TEXT"
+        BROADCAST_DATA[uid] = {"text": None, "photo": None, "delay": 60}
+
+        await query.message.reply_text(
+            "📢 Введите текст рассылки.\n\nЕсли хотите отменить — напишите /admin"
+        )
+        return
+
+    elif data == "broadcast_skip_photo":
+        BROADCAST_DATA[uid]["photo"] = None
+        ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_DELAY"
+        context.user_data["broadcast_waiting_photo"] = False
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⏱ 1 минута", callback_data="broadcast_delay_60")],
+            [InlineKeyboardButton("⏱ 2 минуты", callback_data="broadcast_delay_120")],
+            [InlineKeyboardButton("⏱ 5 минут", callback_data="broadcast_delay_300")]
+        ])
+
+        await query.message.reply_text(
+            "📢 Фото пропущено.\n\nТеперь выберите интервал отправки:",
+            reply_markup=kb
+        )
+        return
+
+    elif data.startswith("broadcast_delay_"):
+        delay = int(data.split("_")[-1])
+        BROADCAST_DATA[uid]["delay"] = delay
+
+        text_preview = BROADCAST_DATA[uid]["text"]
+        photo_preview = BROADCAST_DATA[uid]["photo"]
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Готово (начать рассылку)", callback_data="broadcast_start")],
+            [InlineKeyboardButton("✏️ Изменить текст", callback_data="broadcast_edit_text")],
+            [InlineKeyboardButton("❌ Отмена", callback_data="broadcast_cancel")]
+        ])
+
+        await query.message.reply_text(
+            f"📌 Проверьте рассылку:\n\n"
+            f"📝 Текст:\n{text_preview}\n\n"
+            f"⏱ Интервал: {delay} секунд\n\n"
+            f"Фото: {'Да' if photo_preview else 'Нет'}",
+            reply_markup=kb
+        )
+        return
+
+    elif data == "broadcast_edit_text":
+        ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_TEXT"
+        await query.message.reply_text("✏️ Введите новый текст рассылки:")
+        return
+
+    elif data == "broadcast_cancel":
+        ADMIN_STATES.pop(uid, None)
+        BROADCAST_DATA.pop(uid, None)
+        context.user_data["broadcast_waiting_photo"] = False
+
+        await query.message.reply_text("❌ Рассылка отменена.")
+        await admin_panel(update, context)
+        return
+
+    elif data == "broadcast_start":
+        text_msg = BROADCAST_DATA[uid]["text"]
+        photo_id = BROADCAST_DATA[uid]["photo"]
+        delay = BROADCAST_DATA[uid]["delay"]
+
+        await query.message.reply_text("🚀 Рассылка началась...")
+
+        ADMIN_STATES.pop(uid, None)
+        BROADCAST_DATA.pop(uid, None)  # ← ДОБАВЛЕНО: очистка после старта
+
+        asyncio.create_task(start_broadcast(context, text_msg, photo_id, delay))
+
+        return
+
     elif data.startswith("admin_add_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
-        phone = normalize_phone(phone)  # ← ИСПРАВЛЕНО: нормализация
+        phone = normalize_phone(phone)
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_ADD_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для добавления клиенту {phone}:")
 
     elif data.startswith("admin_sub_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
-        phone = normalize_phone(phone)  # ← ИСПРАВЛЕНО: нормализация
+        phone = normalize_phone(phone)
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_SUB_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для списания у клиента {phone}:")
 
@@ -606,6 +707,22 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     text = update.message.text.strip()
     state = ADMIN_STATES.get(uid)
+
+    # ====== РАССЫЛКА ======
+    if state == "ADMIN_BROADCAST_WAIT_TEXT":
+        BROADCAST_DATA[uid]["text"] = text
+        ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_PHOTO_OR_SKIP"
+        context.user_data["broadcast_waiting_photo"] = True
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📷 Пропустить фото", callback_data="broadcast_skip_photo")]
+        ])
+
+        await update.message.reply_text(
+            "✅ Текст сохранён.\n\nТеперь отправьте фото для рассылки или нажмите «Пропустить фото».",
+            reply_markup=kb
+        )
+        return
 
     if state == "ADMIN_WAIT_PHONE":
         phone = normalize_phone(text)
@@ -768,6 +885,40 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ADMIN_STATES.pop(uid, None)
         return
 
+# ФУНКЦИЯ РАССЫЛКИ
+async def start_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str, photo: str, delay: int):
+    if not users_sheet:
+        return
+
+    try:
+        ids = users_sheet.col_values(1)[1:]  # Telegram ID из 1 колонки, пропускаем заголовок
+    except:
+        return
+
+    sent = 0
+    failed = 0
+
+    for user_id in ids:
+        try:
+            user_id = int(user_id)
+
+            if photo:
+                await context.bot.send_photo(chat_id=user_id, photo=photo, caption=text)
+            else:
+                await context.bot.send_message(chat_id=user_id, text=text)
+
+            sent += 1
+            await asyncio.sleep(delay)
+
+        except Exception as e:
+            failed += 1
+            continue
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=f"✅ Рассылка завершена!\n\nОтправлено: {sent}\nОшибок: {failed}"
+    )
+
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
 
@@ -784,8 +935,7 @@ def main():
 
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
-    app.add_handler(CallbackQueryHandler(query_handler))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_|broadcast_)"))  # ← ИСПРАВЛЕНО
 
     app.run_polling()
 
