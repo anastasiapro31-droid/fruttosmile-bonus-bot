@@ -205,8 +205,12 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
         customers = []
 
         for variant in variants:
-            search_url = f"{RETAILCRM_URL}/api/v5/customers?filter[phones][]={variant}"
-            search_response = requests.get(search_url, headers=RETAILCRM_HEADERS)
+            search_url = f"{RETAILCRM_URL}/api/v5/customers"
+            search_response = requests.get(
+                search_url,
+                headers=RETAILCRM_HEADERS,
+                params={"filter[phones][]": variant}
+            )
 
             print("RetailCRM SEARCH:", variant, search_response.status_code, search_response.text)
             
