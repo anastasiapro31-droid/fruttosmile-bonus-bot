@@ -935,9 +935,17 @@ def main():
 
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
 
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_|broadcast_)"))  # ← ИСПРАВЛЕНО
+        # --- CALLBACK ADMIN ---
+    app.add_handler(CallbackQueryHandler(
+        admin_callback,
+        pattern=r"^(admin_|broadcast_)"
+    ))
     
-    app.add_handler(CallbackQueryHandler(query_handler))
+    # --- CALLBACK USER ---
+    app.add_handler(CallbackQueryHandler(
+        query_handler,
+        pattern=r"^(cat_|confirm_photo_request|cancel_photo_request|st_|rev_)"
+    ))
     
     app.run_polling()
 
