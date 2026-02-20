@@ -31,7 +31,7 @@ from telegram.ext import (
 # КОНФИГУРАЦИЯ — меняй только здесь
 # ────────────────────────────────────────────────
 
-BOT_TOKEN = "8589427171:AAEZ2J3Eug-ynLUuGZlM4ByYeY-sGWjFe2Q"          # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ!
+BOT_TOKEN = "8589427171:AAHtbVHDeErpwwXMjOL7zs71ZmHh7ZnW-hI"          # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ!
 
 ADMIN_ID = 1165444045
 ADMIN_LAST_REQUEST = {}
