@@ -6,10 +6,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import requests
 from datetime import datetime
 import asyncio
-
+ 
 import gspread
 from google.oauth2.service_account import Credentials
-
+ 
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -26,37 +26,37 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-
+ 
 # ────────────────────────────────────────────────
 # КОНФИГУРАЦИЯ — меняй только здесь
 # ────────────────────────────────────────────────
-
+ 
 BOT_TOKEN = "8589427171:AAHtbVHDeErpwwXMjOL7zs71ZmHh7ZnW-hI"          # ← ОБЯЗАТЕЛЬНО ЗАМЕНИ!
-
+ 
 ADMIN_ID = 1165444045
 ADMIN_LAST_REQUEST = {}
 ADMIN_STATES = {}  # {user_id: state}
 BROADCAST_DATA = {}  # временное хранение рассылки для админа
-
+ 
 RETAILCRM_URL = "https://xtv17101986.retailcrm.ru"     # ← замени или удали блоки ниже
 RETAILCRM_API_KEY = "6ipmvADZaxUSe3usdKOauTFZjjGMOlf7"               # ← замени или удали
 RETAILCRM_HEADERS = {
     "X-API-KEY": RETAILCRM_API_KEY,
     "Content-Type": "application/json"
 }
-
+ 
 SHEET_NAME = "Fruttosmile Bonus CRM"
-
+ 
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
-
+ 
 CREDS_FILE = "credentials.json"
-
+ 
 users_sheet = None
 logs_sheet = None
-
+ 
 try:
     creds = Credentials.from_service_account_file(CREDS_FILE, scopes=SCOPE)
     gc = gspread.authorize(creds)
@@ -66,25 +66,25 @@ try:
     print("Google Sheets подключена успешно")
 except Exception as e:
     print(f"Ошибка подключения Google Sheets: {e}")
-
+ 
 # НОРМАЛИЗАЦИЯ ТЕЛЕФОНА
 def normalize_phone(phone: str) -> str:
     phone = re.sub(r'[^0-9+]', '', phone)
-
+ 
     # если начинается с +7 -> оставляем
     if phone.startswith("+7") and len(phone) == 12:
         return phone
-
+ 
     # если начинается с 8 -> меняем на +7
     if phone.startswith("8") and len(phone) == 11:
         return "+7" + phone[1:]
-
+ 
     # если начинается с 7 -> добавляем +
     if phone.startswith("7") and len(phone) == 11:
         return "+7" + phone[1:]
-
+ 
     return phone
-
+ 
 # ВАРИАНТЫ НОМЕРА ДЛЯ ПОИСКА (все 3 формата)
 def get_phone_variants(phone: str) -> list:
     norm = normalize_phone(phone)
@@ -93,19 +93,19 @@ def get_phone_variants(phone: str) -> list:
         variants.append("8" + norm[2:])
         variants.append("7" + norm[2:])
     return variants
-
+ 
 # Health check
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-
+ 
 def run_health_server():
     port = int(os.environ.get("PORT", 8080))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
-
+ 
 # КАТАЛОГ ТОВАРОВ
 PRODUCTS = {
     "boxes": [
@@ -131,11 +131,11 @@ PRODUCTS = {
         {"name": "Мужская корзина «Брутал»", "price": "12990", "photo": "http://fruttosmile.su/wp-content/uploads/2025/03/whatsapp202023_10_1620v2014.38.08_14f00b4d_481x582.jpg"}
     ]
 }
-
+ 
 # ========================================================
 #  ФУНКЦИИ
 # ========================================================
-
+ 
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = ReplyKeyboardMarkup([
         ["📊 Информация о бонусах", "📖 Каталог товаров"],
@@ -144,27 +144,27 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ], resize_keyboard=True)
     msg = "Выберите действие в меню FruttoSmile: 🍓"
     await update.effective_message.reply_text(msg, reply_markup=kb)
-
+ 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     btn = KeyboardButton("📲 Регистрация и +300 бонусов", request_contact=True)
     await update.message.reply_text(
         "🍓 Добро пожаловать!\n\nДля активации бонусов нажмите кнопку ниже 👇",
         reply_markup=ReplyKeyboardMarkup([[btn]], resize_keyboard=True, one_time_keyboard=True)
     )
-
+ 
 async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TYPE, phone: str):
     uid = update.effective_user.id
     user = update.effective_user
-
+ 
     first_name = user.first_name or "не указано"
     last_name  = user.last_name  or ""
     username   = user.username   or "нет"
     full_name = f"{first_name} {last_name}".strip()
-
+ 
     await update.effective_message.reply_text(
         "🔍 Запрос отправлен менеджеру!\nМы сообщим вам, когда статус изменится."
     )
-
+ 
     admin_kb = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✅ Готов",    callback_data=f"st_ready_{uid}"),
@@ -172,7 +172,7 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
             InlineKeyboardButton("❌ Заказа нет", callback_data=f"st_none_{uid}")
         ]
     ])
-
+ 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
@@ -184,28 +184,28 @@ async def process_photo_request(update: Update, context: ContextTypes.DEFAULT_TY
         ),
         reply_markup=admin_kb
     )
-
+ 
     ADMIN_LAST_REQUEST[ADMIN_ID] = uid
-
+ 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     phone = normalize_phone(update.message.contact.phone_number)
-
+ 
     state = context.user_data.get('state')
-
+ 
     if state == 'WAIT_ORDER':
         context.user_data['phone'] = phone
         await process_photo_request(update, context, phone)
         return
-
+ 
     context.user_data['phone'] = phone
     uid = update.effective_user.id
     name = update.effective_user.full_name or "Клиент"
-
+ 
     # RetailCRM — поиск по всем вариантам номера
     try:
         variants = get_phone_variants(phone)
         customers = []
-
+ 
         for variant in variants:
             search_url = f"{RETAILCRM_URL}/api/v5/customers"
             search_response = requests.get(
@@ -217,7 +217,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "page": 1
                 }
             )
-
+ 
             print("RetailCRM SEARCH:", variant, search_response.status_code, search_response.text)
             
             search_response.raise_for_status()
@@ -225,7 +225,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if found:
                 customers = found
                 break
-
+ 
         if not customers:
             create_url = f"{RETAILCRM_URL}/api/v5/customers/create"
             resp = requests.post(create_url, headers=RETAILCRM_HEADERS, json={
@@ -239,18 +239,18 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             print("RetailCRM CREATE STATUS:", resp.status_code)
             print("RetailCRM CREATE RESPONSE:", resp.text)
-
+ 
         else:
             print("RetailCRM: клиент уже существует — ничего не меняем")
     except Exception as e:
         print(f"RetailCRM error: {e}")
-
+ 
     # Google Sheets — поиск по всем вариантам
     if users_sheet:
         try:
             variants = get_phone_variants(phone)
             cell = None
-
+ 
             for variant in variants:
                 try:
                     cell = users_sheet.find(variant, in_column=4)
@@ -258,7 +258,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         break
                 except:
                     pass
-
+ 
             if cell:
                 await update.message.reply_text("Вы уже зарегистрированы!")
             else:
@@ -273,7 +273,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "False"
                 ]
                 users_sheet.append_row(new_row, value_input_option="RAW")
-
+ 
                 if logs_sheet:
                     logs_sheet.append_row([
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -283,14 +283,14 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         300,
                         "Регистрация через бот"
                     ], value_input_option="RAW")
-
+ 
                 await update.message.reply_text("🎉 Регистрация успешна! Начислено 300 бонусов.")
         except Exception as e:
             print(f"Google Sheets error: {e}")
             await update.message.reply_text("Ошибка регистрации в базе.")
-
+ 
     await send_main_menu(update, context)
-
+ 
 async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'phone' not in context.user_data:
         btn = KeyboardButton("📲 Подтвердить номер", request_contact=True)
@@ -300,7 +300,7 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
         )
         context.user_data['state'] = 'WAIT_ORDER'
         return
-
+ 
     keyboard = [
         [
             InlineKeyboardButton("✅ Да, запросить", callback_data="confirm_photo_request"),
@@ -312,20 +312,20 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
-
+ 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     state = context.user_data.get('state')
-
+ 
     if msg == "⬅️ Назад":
         context.user_data.pop('state', None)
         await send_main_menu(update, context)
         return
-
+ 
     if msg == "📸 Получить фото заказа":
         await show_photo_confirmation(update, context)
         return
-
+ 
     if msg == "📖 Каталог товаров":
         kb = [
             [InlineKeyboardButton("🎁 Подарочные боксы", callback_data="cat_boxes")],
@@ -335,7 +335,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         await update.message.reply_text("Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
         return
-
+ 
     if msg == "⭐ Оставить отзыв":
         context.user_data['state'] = 'WAIT_REVIEW'
         kb = [
@@ -349,11 +349,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(kb)
         )
         return
-
+ 
     if msg == "📍 Адреса самовывоза":
         await update.message.reply_text("📍 Иркутск, Улица Дыбовского, 8/5\n⏰ 09:00-20:00")
         return
-
+ 
     if msg == "🛒 Оформить заказ":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🌐 Заказать на сайте", url="https://fruttosmile.ru/")],
@@ -362,19 +362,19 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await update.message.reply_text("Выберите способ заказа:", reply_markup=kb)
         return
-
+ 
     if msg == "📊 Информация о бонусах":
         if not users_sheet:
             await update.message.reply_text("База недоступна.")
             return
-
+ 
         phone = context.user_data.get('phone')
         if not phone:
             await update.message.reply_text("Сначала зарегистрируйтесь!")
             return
-
+ 
         phone = normalize_phone(phone)
-
+ 
         try:
             cell = None
             variants = get_phone_variants(phone)
@@ -385,7 +385,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         break
                 except:
                     pass
-
+ 
             if cell:
                 balance = int(users_sheet.cell(cell.row, 5).value or 0)
                 await update.message.reply_text(f"🎁 Ваш баланс: {balance} бонусов.")
@@ -394,39 +394,39 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             await update.message.reply_text(f"Ошибка: {str(e)}")
         return
-
+ 
     await update.message.reply_text("Неизвестная команда.")
-
+ 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     user_id = message.from_user.id
-
+ 
     # ====== РАССЫЛКА: админ отправляет фото ======
     if user_id == ADMIN_ID and context.user_data.get("broadcast_waiting_photo"):
         file_id = message.photo[-1].file_id
-
+ 
         BROADCAST_DATA[ADMIN_ID]["photo"] = file_id
         context.user_data["broadcast_waiting_photo"] = False
         ADMIN_STATES[ADMIN_ID] = "ADMIN_BROADCAST_WAIT_DELAY"
-
+ 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱ 1 минута", callback_data="broadcast_delay_60")],
             [InlineKeyboardButton("⏱ 2 минуты", callback_data="broadcast_delay_120")],
             [InlineKeyboardButton("⏱ 5 минут", callback_data="broadcast_delay_300")]
         ])
-
+ 
         await update.message.reply_text(
             "📷 Фото сохранено!\n\nТеперь выберите интервал отправки:",
             reply_markup=kb
         )
         return
-
+ 
     if user_id == ADMIN_ID and message.photo:
         target_id = ADMIN_LAST_REQUEST.get(ADMIN_ID)
         if not target_id:
             await message.reply_text("❌ Нет активного запроса на фото.")
             return
-
+ 
         await context.bot.send_photo(
             chat_id=target_id,
             photo=message.photo[-1].file_id,
@@ -435,21 +435,21 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(f"✅ Фото отправлено клиенту (ID: {target_id})")
         del ADMIN_LAST_REQUEST[ADMIN_ID]
         return
-
+ 
     if context.user_data.get('state') == 'WAIT_REVIEW':
         phone = context.user_data.get('phone', 'Не указан')
         name = update.message.from_user.full_name
         client_id = update.effective_user.id
-
+ 
         await update.message.reply_text("✅ Скриншот принят! Ожидайте начисления бонусов.")
-
+ 
         admin_kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("✅ Принять (+250)", callback_data=f"rev_app_{client_id}"),
                 InlineKeyboardButton("❌ Отклонить", callback_data=f"rev_rej_{client_id}")
             ]
         ])
-
+ 
         await context.bot.send_photo(
             chat_id=ADMIN_ID,
             photo=update.message.photo[-1].file_id,
@@ -458,20 +458,24 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=admin_kb
         )
         context.user_data['state'] = None
-
+ 
+    return
+ 
 async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
-
+ 
+    print("USER CALLBACK:", data)
+ 
     if data.startswith("cat_"):
         category = data.split("_")[1]
         items = PRODUCTS.get(category, [])
-
+ 
         if not items:
             await query.message.reply_text("Категория не найдена.")
             return
-
+ 
         for item in items:
             caption = f"{item['name']}\nЦена: {item['price']} руб."
             kb = InlineKeyboardMarkup([
@@ -479,40 +483,40 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("Связаться с магазином", url="https://t.me/fruttosmile_bot")]
             ])
             await context.bot.send_photo(
-                chat_id=query.message.chat_id,
+                chat_id=query.message.chat.id,
                 photo=item['photo'],
                 caption=caption,
                 reply_markup=kb
             )
-
+ 
         return
-
+ 
     if data == "confirm_photo_request":
         phone = context.user_data.get('phone')
         uid = update.effective_user.id
-
+ 
         if not phone:
             await query.message.reply_text("Сначала зарегистрируйтесь.")
             return
-
+ 
         await process_photo_request(update, context, phone)
-
+ 
         context.user_data.pop('state', None)
         return
-
+ 
     if data == "cancel_photo_request":
         await query.edit_message_text("Запрос отменён.")
         context.user_data.pop('state', None)
         await send_main_menu(update, context)
         return
-
+ 
     if data.startswith("st_"):
         parts = data.split("_")
         if len(parts) < 3:
             return
-
+ 
         uid = int(parts[2])
-
+ 
         if "ready" in data:
             await context.bot.send_message(uid, "✅ Заказ готов! Фото скоро придёт.")
             ADMIN_LAST_REQUEST[ADMIN_ID] = uid
@@ -520,23 +524,23 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ADMIN_ID,
                 f"📸 Отправьте фото заказа клиенту (ID: {uid})"
             )
-
+ 
         elif "work" in data:
             await context.bot.send_message(uid, "⏳ Заказ в работе!")
-
+ 
         else:
             await context.bot.send_message(uid, "❌ Заказ не найден.")
-
+ 
         return
-
+ 
     if data.startswith("rev_"):
         parts = data.split("_")
         if len(parts) < 3:
             return
-
+ 
         action = parts[1]
         client_id = int(parts[2])
-
+ 
         if action == "app":
             if users_sheet:
                 try:
@@ -547,7 +551,7 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         new_balance = current + 250
                         users_sheet.update_cell(row, 5, new_balance)
                         users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
+ 
                         if logs_sheet:
                             logs_sheet.append_row([
                                 datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -557,49 +561,55 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 250,
                                 "Бонус за отзыв"
                             ], value_input_option="RAW")
-
+ 
                         await context.bot.send_message(client_id, "🎉 Отзыв проверен! +250 бонусов.")
                         await query.edit_message_caption(caption=query.message.caption + "\n\n✅ ОДОБРЕНО. +250")
                 except Exception as e:
                     await context.bot.send_message(client_id, f"Ошибка: {str(e)}")
-
+ 
         elif action == "rej":
             await context.bot.send_message(client_id, "❌ Отзыв отклонён.")
             await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
-
+            return  # ← ДОБАВЛЕНО ЗДЕСЬ
+ 
+        return  # ← ДОБАВЛЕНО ЗДЕСЬ, чтобы не проваливаться дальше
+ 
 # ========================================================
 #  АДМИНКА + РАССЫЛКА
 # ========================================================
-
+ 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("Доступ запрещён.")
         return
-
+ 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
         [InlineKeyboardButton("📢 Сделать рассылку", callback_data="admin_broadcast")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
     ])
-
+ 
     await update.message.reply_text("🛠 Админ-панель", reply_markup=kb)
-
+ 
 async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+ 
+    print("ADMIN CALLBACK:", data)
+ 
     uid = query.from_user.id
-
+ 
     if uid != ADMIN_ID:
         return
-
+ 
     if data == "admin_find_client":
         ADMIN_STATES[uid] = "ADMIN_WAIT_PHONE"
         await query.message.reply_text(
             "Введите номер телефона клиента (например +79991234567):",
             reply_markup=ReplyKeyboardRemove()
         )
-
+ 
     elif data == "admin_back":
         ADMIN_STATES.pop(uid, None)
         kb = InlineKeyboardMarkup([
@@ -609,46 +619,46 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await query.message.reply_text("🛠 Админ-панель", reply_markup=kb)
         return
-
+ 
     elif data == "admin_broadcast":
         ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_TEXT"
         BROADCAST_DATA[uid] = {"text": None, "photo": None, "delay": 60}
-
+ 
         await query.message.reply_text(
             "📢 Введите текст рассылки.\n\nЕсли хотите отменить — напишите /admin"
         )
         return
-
+ 
     elif data == "broadcast_skip_photo":
         BROADCAST_DATA[uid]["photo"] = None
         ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_DELAY"
         context.user_data["broadcast_waiting_photo"] = False
-
+ 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏱ 1 минута", callback_data="broadcast_delay_60")],
             [InlineKeyboardButton("⏱ 2 минуты", callback_data="broadcast_delay_120")],
             [InlineKeyboardButton("⏱ 5 минут", callback_data="broadcast_delay_300")]
         ])
-
+ 
         await query.message.reply_text(
             "📢 Фото пропущено.\n\nТеперь выберите интервал отправки:",
             reply_markup=kb
         )
         return
-
+ 
     elif data.startswith("broadcast_delay_"):
         delay = int(data.split("_")[-1])
         BROADCAST_DATA[uid]["delay"] = delay
-
+ 
         text_preview = BROADCAST_DATA[uid]["text"]
         photo_preview = BROADCAST_DATA[uid]["photo"]
-
+ 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Готово (начать рассылку)", callback_data="broadcast_start")],
             [InlineKeyboardButton("✏️ Изменить текст", callback_data="broadcast_edit_text")],
             [InlineKeyboardButton("❌ Отмена", callback_data="broadcast_cancel")]
         ])
-
+ 
         await query.message.reply_text(
             f"📌 Проверьте рассылку:\n\n"
             f"📝 Текст:\n{text_preview}\n\n"
@@ -657,81 +667,87 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb
         )
         return
-
+ 
     elif data == "broadcast_edit_text":
         ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_TEXT"
         await query.message.reply_text("✏️ Введите новый текст рассылки:")
         return
-
+ 
     elif data == "broadcast_cancel":
         ADMIN_STATES.pop(uid, None)
         BROADCAST_DATA.pop(uid, None)
         context.user_data["broadcast_waiting_photo"] = False
-
+ 
         await query.message.reply_text("❌ Рассылка отменена.")
         await admin_panel(update, context)
         return
-
+ 
     elif data == "broadcast_start":
         text_msg = BROADCAST_DATA[uid]["text"]
         photo_id = BROADCAST_DATA[uid]["photo"]
         delay = BROADCAST_DATA[uid]["delay"]
-
+ 
         await query.message.reply_text("🚀 Рассылка началась...")
-
+ 
         ADMIN_STATES.pop(uid, None)
         BROADCAST_DATA.pop(uid, None)  # ← ДОБАВЛЕНО: очистка после старта
-
+ 
         asyncio.create_task(start_broadcast(context, text_msg, photo_id, delay))
-
+ 
         return
-
+ 
     elif data.startswith("admin_add_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
         phone = normalize_phone(phone)
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_ADD_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для добавления клиенту {phone}:")
-
+        return
+ 
     elif data.startswith("admin_sub_"):
         safe_phone = data.split("_")[2]
         phone = "+" + safe_phone
         phone = normalize_phone(phone)
         ADMIN_STATES[uid] = f"ADMIN_WAIT_AMOUNT_SUB_{safe_phone}"
         await query.message.reply_text(f"Введите сумму для списания у клиента {phone}:")
-
+        return
+ 
+    else:
+        print("UNHANDLED ADMIN CALLBACK:", data)
+        return
+ 
 async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if uid != ADMIN_ID:
         return
-
+ 
     text = update.message.text.strip()
     state = ADMIN_STATES.get(uid)
-
+ 
     # ====== РАССЫЛКА ======
     if state == "ADMIN_BROADCAST_WAIT_TEXT":
         BROADCAST_DATA[uid]["text"] = text
         ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_PHOTO_OR_SKIP"
         context.user_data["broadcast_waiting_photo"] = True
-
+ 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("📷 Пропустить фото", callback_data="broadcast_skip_photo")]
         ])
-
+ 
         await update.message.reply_text(
             "✅ Текст сохранён.\n\nТеперь отправьте фото для рассылки или нажмите «Пропустить фото».",
             reply_markup=kb
         )
         return
-
+ 
     if state == "ADMIN_WAIT_PHONE":
         phone = normalize_phone(text)
-
+ 
         if not users_sheet:
             await update.message.reply_text("База недоступна.")
             ADMIN_STATES.pop(uid, None)
             return
-
+ 
         try:
             cell = None
             variants = get_phone_variants(phone)
@@ -742,12 +758,12 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         break
                 except:
                     pass
-
+ 
             if cell:
                 row = cell.row
                 name = users_sheet.cell(row, 3).value or "Не указано"
                 balance = int(users_sheet.cell(row, 5).value or 0)
-
+ 
                 safe_phone = phone.replace("+", "")
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("➕ Добавить", callback_data=f"admin_add_{safe_phone}")],
@@ -755,7 +771,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("🔍 Найти другого клиента", callback_data="admin_find_client")],
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
-
+ 
                 await update.message.reply_text(
                     f"Клиент найден:\nИмя: {name}\nТелефон: {phone}\nБаланс: {balance} бонусов",
                     reply_markup=kb
@@ -766,28 +782,28 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
                 await update.message.reply_text(f"❌ Клиент с номером {phone} не найден.", reply_markup=kb)
-
+ 
         except Exception as e:
             await update.message.reply_text(f"Ошибка поиска: {str(e)}")
-
+ 
         ADMIN_STATES.pop(uid, None)
         return
-
+ 
     if state and state.startswith("ADMIN_WAIT_AMOUNT_ADD_"):
         if not users_sheet:
             await update.message.reply_text("База недоступна.")
             ADMIN_STATES.pop(uid, None)
             return
-
+ 
         safe_phone = state.split("_")[-1]
         phone = "+" + safe_phone
         phone = normalize_phone(phone)
-
+ 
         try:
             amount = int(text)
             if amount <= 0:
                 raise ValueError
-
+ 
             cell = None
             variants = get_phone_variants(phone)
             for variant in variants:
@@ -797,14 +813,14 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         break
                 except:
                     pass
-
+ 
             if cell:
                 row = cell.row
                 current = int(users_sheet.cell(row, 5).value or 0)
                 new_balance = current + amount
                 users_sheet.update_cell(row, 5, new_balance)
                 users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
+ 
                 if logs_sheet:
                     logs_sheet.append_row([
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -814,36 +830,36 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         amount,
                         "Добавлено админом"
                     ], value_input_option="RAW")
-
+ 
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
-
+ 
                 await update.message.reply_text(f"Добавлено {amount} бонусов. Новый баланс: {new_balance}", reply_markup=kb)
             else:
                 await update.message.reply_text("Клиент не найден.")
         except:
             await update.message.reply_text("Введите положительное число.")
-
+ 
         ADMIN_STATES.pop(uid, None)
         return
-
+ 
     if state and state.startswith("ADMIN_WAIT_AMOUNT_SUB_"):
         if not users_sheet:
             await update.message.reply_text("База недоступна.")
             ADMIN_STATES.pop(uid, None)
             return
-
+ 
         safe_phone = state.split("_")[-1]
         phone = "+" + safe_phone
         phone = normalize_phone(phone)
-
+ 
         try:
             amount = int(text)
             if amount <= 0:
                 raise ValueError
-
+ 
             cell = None
             variants = get_phone_variants(phone)
             for variant in variants:
@@ -853,14 +869,14 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         break
                 except:
                     pass
-
+ 
             if cell:
                 row = cell.row
                 current = int(users_sheet.cell(row, 5).value or 0)
                 new_balance = max(0, current - amount)
                 users_sheet.update_cell(row, 5, new_balance)
                 users_sheet.update_cell(row, 7, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
+ 
                 if logs_sheet:
                     logs_sheet.append_row([
                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -870,72 +886,72 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         -amount,
                         "Списано админом"
                     ], value_input_option="RAW")
-
+ 
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
-
+ 
                 await update.message.reply_text(f"Списано {amount} бонусов. Новый баланс: {new_balance}", reply_markup=kb)
             else:
                 await update.message.reply_text("Клиент не найден.")
         except:
             await update.message.reply_text("Введите положительное число.")
-
+ 
         ADMIN_STATES.pop(uid, None)
         return
-
+ 
 # ФУНКЦИЯ РАССЫЛКИ
 async def start_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str, photo: str, delay: int):
     if not users_sheet:
         return
-
+ 
     try:
         ids = users_sheet.col_values(1)[1:]  # Telegram ID из 1 колонки, пропускаем заголовок
     except:
         return
-
+ 
     sent = 0
     failed = 0
-
+ 
     for user_id in ids:
         try:
             user_id = int(user_id)
-
+ 
             if photo:
                 await context.bot.send_photo(chat_id=user_id, photo=photo, caption=text)
             else:
                 await context.bot.send_message(chat_id=user_id, text=text)
-
+ 
             sent += 1
             await asyncio.sleep(delay)
-
+ 
         except Exception as e:
             failed += 1
             continue
-
+ 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=f"✅ Рассылка завершена!\n\nОтправлено: {sent}\nОшибок: {failed}"
     )
-
+ 
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
-
+ 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
+ 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
-
+ 
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
-
+ 
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[0-9+\-\s]{1,30}$'), admin_text_handler))
-
+ 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
+ 
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-
-        # --- CALLBACK ADMIN ---
+ 
+    # --- CALLBACK ADMIN ---
     app.add_handler(CallbackQueryHandler(
         admin_callback,
         pattern=r"^(admin_|broadcast_)"
@@ -948,6 +964,6 @@ def main():
     ))
     
     app.run_polling()
-
+ 
 if __name__ == "__main__":
     main()
