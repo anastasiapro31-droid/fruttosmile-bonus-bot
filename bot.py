@@ -934,11 +934,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    
-    app.add_handler(CallbackQueryHandler(query_handler))
 
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^(admin_|broadcast_)"))  # ← ИСПРАВЛЕНО
-
+    
+    app.add_handler(CallbackQueryHandler(query_handler))
+    
     app.run_polling()
 
 if __name__ == "__main__":
