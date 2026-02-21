@@ -313,6 +313,17 @@ async def show_photo_confirmation(update: Update, context: ContextTypes.DEFAULT_
     )
     context.user_data['state'] = 'AWAITING_PHOTO_CONFIRM'
  
+async def global_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    
+    # Если это админ и у него активно какое-то состояние (поиск или рассылка)
+    if uid == ADMIN_ID and ADMIN_STATES.get(uid):
+        await admin_text_handler(update, context)
+        return
+
+    # Во всех остальных случаях — обычное меню
+    await text_handler(update, context)
+ 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message.text.strip()
     state = context.user_data.get('state')
@@ -570,9 +581,9 @@ async def query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif action == "rej":
             await context.bot.send_message(client_id, "❌ Отзыв отклонён.")
             await query.edit_message_caption(caption=query.message.caption + "\n\n❌ ОТКЛОНЕНО.")
-            return  # ← ДОБАВЛЕНО ЗДЕСЬ
+            return
  
-        return  # ← ДОБАВЛЕНО ЗДЕСЬ, чтобы не проваливаться дальше
+        return
  
 # ========================================================
 #  АДМИНКА + РАССЫЛКА
@@ -623,10 +634,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_broadcast":
         ADMIN_STATES[uid] = "ADMIN_BROADCAST_WAIT_TEXT"
         BROADCAST_DATA[uid] = {"text": None, "photo": None, "delay": 60}
- 
-        await query.message.reply_text(
-            "📢 Введите текст рассылки.\n\nЕсли хотите отменить — напишите /admin"
-        )
+        context.user_data["broadcast_waiting_photo"] = False  # Сброс старого
+        await query.message.reply_text("📢 Введите текст рассылки.\n\nЕсли хотите отменить — напишите /admin")
         return
  
     elif data == "broadcast_skip_photo":
@@ -776,17 +785,19 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"Клиент найден:\nИмя: {name}\nТелефон: {phone}\nБаланс: {balance} бонусов",
                     reply_markup=kb
                 )
+                # ← НЕ УДАЛЯЕМ СОСТОЯНИЕ здесь! Оставляем, чтобы можно было нажать Добавить/Списать
             else:
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔍 Найти другого клиента", callback_data="admin_find_client")],
                     [InlineKeyboardButton("⬅️ Назад", callback_data="admin_back")]
                 ])
                 await update.message.reply_text(f"❌ Клиент с номером {phone} не найден.", reply_markup=kb)
+                ADMIN_STATES.pop(uid, None)  # ← УДАЛЯЕМ ТОЛЬКО если не найден
  
         except Exception as e:
             await update.message.reply_text(f"Ошибка поиска: {str(e)}")
+            ADMIN_STATES.pop(uid, None)
  
-        ADMIN_STATES.pop(uid, None)
         return
  
     if state and state.startswith("ADMIN_WAIT_AMOUNT_ADD_"):
@@ -901,66 +912,65 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ADMIN_STATES.pop(uid, None)
         return
  
-# ФУНКЦИЯ РАССЫЛКИ
+# ФУНКЦИЯ РАССЫЛКИ — исправленная версия
 async def start_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str, photo: str, delay: int):
     if not users_sheet:
+        await context.bot.send_message(chat_id=ADMIN_ID, text="❌ Ошибка: База данных недоступна.")
         return
  
     try:
-        ids = users_sheet.col_values(1)[1:]  # Telegram ID из 1 колонки, пропускаем заголовок
-    except:
+        # Получаем все ID за один запрос к таблице, чтобы не нагружать API
+        ids = users_sheet.col_values(1)[1:] 
+    except Exception as e:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=f"❌ Ошибка чтения таблицы: {e}")
         return
  
-    sent = 0
-    failed = 0
- 
-    for user_id in ids:
+    sent, failed = 0, 0
+    for uid_raw in ids:
+        if not str(uid_raw).strip(): 
+            continue # Пропуск пустых строк
         try:
-            user_id = int(user_id)
- 
+            target_id = int(uid_raw)
             if photo:
-                await context.bot.send_photo(chat_id=user_id, photo=photo, caption=text)
+                await context.bot.send_photo(chat_id=target_id, photo=photo, caption=text)
             else:
-                await context.bot.send_message(chat_id=user_id, text=text)
- 
+                await context.bot.send_message(chat_id=target_id, text=text)
             sent += 1
-            await asyncio.sleep(delay)
- 
-        except Exception as e:
+            # Анти-спам задержка: Telegram рекомендует не более 30 сообщ/сек
+            await asyncio.sleep(delay) 
+        except Exception:
             failed += 1
             continue
  
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=f"✅ Рассылка завершена!\n\nОтправлено: {sent}\nОшибок: {failed}"
+        text=f"✅ Рассылка завершена!\n\nОтправлено: {sent}\nОшибок (блок бота): {failed}"
     )
  
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
- 
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
- 
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
- 
+
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
- 
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r'^[0-9+\-\s]{1,30}$'), admin_text_handler))
- 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
- 
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
- 
-    # --- CALLBACK ADMIN ---
+
+    # Обработка текста через глобальный распределитель
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_text_handler))
+
+    # 1. Сначала админские действия и рассылка (admin_ и broadcast_)
     app.add_handler(CallbackQueryHandler(
-        admin_callback,
+        admin_callback, 
         pattern=r"^(admin_|broadcast_)"
     ))
     
-    # --- CALLBACK USER ---
+    # 2. Потом действия, общие для всех (отзывы rev_, статусы st_, категории cat_, подтверждения confirm_/cancel_)
     app.add_handler(CallbackQueryHandler(
-        query_handler,
-        pattern=r"^(cat_|confirm_photo_request|cancel_photo_request|st_|rev_)"
+        query_handler, 
+        pattern=r"^(cat_|confirm_|cancel_|st_|rev_)"
     ))
     
     app.run_polling()
