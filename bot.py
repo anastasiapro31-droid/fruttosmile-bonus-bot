@@ -320,7 +320,7 @@ async def global_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if uid == ADMIN_ID and ADMIN_STATES.get(uid):
         await admin_text_handler(update, context)
         return
-
+ 
     # Во всех остальных случаях — обычное меню
     await text_handler(update, context)
  
@@ -614,6 +614,10 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid != ADMIN_ID:
         return
  
+    # Если это НЕ админский callback — передаём в query_handler
+    if not data.startswith(("admin_", "broadcast_")):
+        return await query_handler(update, context)
+ 
     if data == "admin_find_client":
         ADMIN_STATES[uid] = "ADMIN_WAIT_PHONE"
         await query.message.reply_text(
@@ -623,6 +627,8 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
  
     elif data == "admin_back":
         ADMIN_STATES.pop(uid, None)
+        BROADCAST_DATA.pop(uid, None)
+        context.user_data["broadcast_waiting_photo"] = False
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔍 Найти клиента", callback_data="admin_find_client")],
             [InlineKeyboardButton("📢 Сделать рассылку", callback_data="admin_broadcast")],
@@ -785,7 +791,7 @@ async def admin_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     f"Клиент найден:\nИмя: {name}\nТелефон: {phone}\nБаланс: {balance} бонусов",
                     reply_markup=kb
                 )
-                # ← НЕ УДАЛЯЕМ СОСТОЯНИЕ здесь! Оставляем, чтобы можно было нажать Добавить/Списать
+                ADMIN_STATES.pop(uid, None)   # ← ВОТ ЭТО ОБЯЗАТЕЛЬНО
             else:
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton("🔍 Найти другого клиента", callback_data="admin_find_client")],
@@ -949,20 +955,20 @@ async def start_broadcast(context: ContextTypes.DEFAULT_TYPE, text: str, photo: 
  
 def main():
     threading.Thread(target=run_health_server, daemon=True).start()
-
+ 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-
+ 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
-
+ 
     app.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-
+ 
     # Обработка текста через глобальный распределитель
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_text_handler))
-
-    app.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|broadcast_)"))
-    app.add_handler(CallbackQueryHandler(query_handler))
+ 
+    # Один универсальный хендлер для ВСЕХ callback'ов
+    app.add_handler(CallbackQueryHandler(admin_callback))
     
     app.run_polling()
  
