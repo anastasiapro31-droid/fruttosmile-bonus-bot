@@ -961,17 +961,8 @@ def main():
     # Обработка текста через глобальный распределитель
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_text_handler))
 
-    # 1. Сначала админские действия и рассылка (admin_ и broadcast_)
-    app.add_handler(CallbackQueryHandler(
-        admin_callback, 
-        pattern=r"^(admin_|broadcast_)"
-    ))
-    
-    # 2. Потом действия, общие для всех (отзывы rev_, статусы st_, категории cat_, подтверждения confirm_/cancel_)
-    app.add_handler(CallbackQueryHandler(
-        query_handler, 
-        pattern=r"^(cat_|confirm_|cancel_|st_|rev_)"
-    ))
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^(admin_|broadcast_)"))
+    app.add_handler(CallbackQueryHandler(query_handler))
     
     app.run_polling()
  
